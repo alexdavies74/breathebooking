@@ -193,10 +193,32 @@ select {
 
 .week-view {
   display: grid;
-  grid-template-columns: repeat(7, minmax(180px, 1fr));
+  grid-template-columns: 72px repeat(7, minmax(180px, 1fr));
   gap: 0.9rem;
   overflow-x: auto;
   padding-bottom: 0.5rem;
+}
+
+.time-axis {
+  min-width: 72px;
+}
+
+.time-axis__header {
+  height: 43px;
+}
+
+.time-axis__canvas {
+  position: relative;
+  height: 720px;
+}
+
+.time-axis__tick {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .day-column {
@@ -211,17 +233,16 @@ select {
   position: relative;
   height: 720px;
   border-radius: 24px;
-  background:
-    linear-gradient(180deg, rgba(116, 129, 106, 0.06), rgba(197, 92, 51, 0.02)),
-    repeating-linear-gradient(
-      to bottom,
-      transparent 0,
-      transparent calc(8.333% - 1px),
-      rgba(27, 19, 13, 0.05) calc(8.333% - 1px),
-      rgba(27, 19, 13, 0.05) 8.333%
-    );
+  background: linear-gradient(180deg, rgba(116, 129, 106, 0.06), rgba(197, 92, 51, 0.02));
   border: 1px solid var(--line);
   overflow: hidden;
+}
+
+.day-column__hour-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid rgba(27, 19, 13, 0.06);
 }
 
 .week-block {

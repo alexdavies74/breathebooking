@@ -1,4 +1,4 @@
-import { formatDayLabel, formatTime, startOfToday, toDayKey } from "../domain/date";
+import { clamp, formatDayLabel, formatTime, startOfToday, toDayKey } from "../domain/date";
 import type { BookingDraft, Role, WeekBlock } from "../domain/types";
 
 interface WeekViewProps {
@@ -13,6 +13,14 @@ interface WeekViewProps {
 const DAY_START_MINUTES = 6 * 60;
 const DAY_END_MINUTES = 22 * 60;
 const DAY_RANGE = DAY_END_MINUTES - DAY_START_MINUTES;
+const HOUR_STEP = 60;
+
+function formatHourLabel(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const normalized = hours % 12 || 12;
+  return `${normalized} ${suffix}`;
+}
 
 function minutesIntoDay(timestamp: number): number {
   const date = new Date(timestamp);
@@ -20,8 +28,8 @@ function minutesIntoDay(timestamp: number): number {
 }
 
 function blockPosition(block: { startsAt: number; endsAt: number }) {
-  const start = minutesIntoDay(block.startsAt);
-  const end = minutesIntoDay(block.endsAt);
+  const start = clamp(minutesIntoDay(block.startsAt), DAY_START_MINUTES, DAY_END_MINUTES);
+  const end = clamp(minutesIntoDay(block.endsAt), DAY_START_MINUTES, DAY_END_MINUTES);
   return {
     top: `${((start - DAY_START_MINUTES) / DAY_RANGE) * 100}%`,
     height: `${Math.max(((end - start) / DAY_RANGE) * 100, 6)}%`,
@@ -49,6 +57,10 @@ export function WeekView({
 }: WeekViewProps) {
   const today = startOfToday();
   const dayKeys = Array.from({ length: horizonDays }, (_, index) => toDayKey(today + index * 86400000));
+  const hourMarkers = Array.from(
+    { length: Math.floor(DAY_RANGE / HOUR_STEP) + 1 },
+    (_, index) => DAY_START_MINUTES + index * HOUR_STEP,
+  );
   const grouped = new Map<string, WeekBlock[]>();
 
   dayKeys.forEach((dayKey) => grouped.set(dayKey, []));
@@ -58,6 +70,20 @@ export function WeekView({
 
   return (
     <div className="week-view">
+      <div className="time-axis">
+        <div className="time-axis__header" />
+        <div className="time-axis__canvas">
+          {hourMarkers.map((minutes) => (
+            <div
+              className="time-axis__tick"
+              key={minutes}
+              style={{ top: `${((minutes - DAY_START_MINUTES) / DAY_RANGE) * 100}%` }}
+            >
+              <span>{formatHourLabel(minutes)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
       {dayKeys.map((dayKey, index) => {
         const dayStart = today + index * 86400000;
         const dayBlocks = (grouped.get(dayKey) ?? []).sort((left, right) => left.startsAt - right.startsAt);
@@ -70,6 +96,13 @@ export function WeekView({
               <strong>{formatDayLabel(dayStart)}</strong>
             </header>
             <div className="day-column__canvas">
+              {hourMarkers.map((minutes) => (
+                <div
+                  className="day-column__hour-line"
+                  key={minutes}
+                  style={{ top: `${((minutes - DAY_START_MINUTES) / DAY_RANGE) * 100}%` }}
+                />
+              ))}
               {dayBlocks.map((block) => (
                 <button
                   key={block.id}

@@ -8,6 +8,7 @@ type ProviderRow = RowHandle<Schema, "providers">;
 type ClientRow = RowHandle<Schema, "clients">;
 type SessionRow = RowHandle<Schema, "sessions">;
 type BlockRow = RowHandle<Schema, "personalBlocks">;
+type BaseAvailabilityRow = RowHandle<Schema, "baseAvailabilityWindows">;
 
 export interface ClientConfigInput {
   fullName: string;
@@ -257,4 +258,17 @@ export async function deactivatePersonalBlock(provider: ProviderRow, block: Bloc
   if (busyRow) {
     await db.update("publicBusyWindows", busyRow, { kind: "inactive" }).committed;
   }
+}
+
+export async function updateBaseAvailabilityWindow(
+  window: BaseAvailabilityRow,
+  input: { startMinutes: number; endMinutes: number },
+) {
+  return db
+    .update("baseAvailabilityWindows", window, {
+      startMinutes: input.startMinutes,
+      endMinutes: input.endMinutes,
+      sortKey: window.fields.weekday * 1000 + input.startMinutes,
+    })
+    .committed;
 }

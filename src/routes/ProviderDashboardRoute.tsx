@@ -3,7 +3,12 @@ import QRCode from "qrcode";
 import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
 import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
-import { createClientInvite, createPersonalBlock, createPractice } from "../domain/actions";
+import {
+  createClientInvite,
+  createPersonalBlock,
+  createPractice,
+  updateBaseAvailabilityWindow,
+} from "../domain/actions";
 import { buildProviderWeekBlocks } from "../domain/availability";
 import { manualCalendarSyncAdapter } from "../domain/calendarSync";
 import { formatTime, minutesFromTimestamp, timestampFromDayAndMinutes } from "../domain/date";
@@ -53,6 +58,8 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [inviteQr, setInviteQr] = useState<string | null>(null);
   const [createPracticeStatus, setCreatePracticeStatus] = useState<string | null>(null);
+  const [availabilityStatus, setAvailabilityStatus] = useState<string | null>(null);
+  const [availabilityDrafts, setAvailabilityDrafts] = useState<Record<string, { startMinutes: number; endMinutes: number }>>({});
   const [clientForm, setClientForm] = useState({
     fullName: "",
     email: "",
@@ -109,6 +116,25 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
       setCalendarStatus(status.enabled ? "Calendar sync connected." : "Calendar sync is stubbed for v1.");
     });
   }, []);
+
+  useEffect(() => {
+    setAvailabilityDrafts((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      availability.rows.forEach((row) => {
+        if (!next[row.id]) {
+          next[row.id] = {
+            startMinutes: row.fields.startMinutes,
+            endMinutes: row.fields.endMinutes,
+          };
+          changed = true;
+        }
+      });
+
+      return changed ? next : current;
+    });
+  }, [availability.rows]);
 
   useEffect(() => {
     console.info("[breathe debug] provider-dashboard:state", {
@@ -201,6 +227,63 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
       </section>
 
       <aside className="stack">
+        <section className="panel">
+          <p className="eyebrow">Base availability</p>
+          <h2>Adjust your weekly template</h2>
+          <p>These drag handles edit the default windows your clients inherit before client-specific narrowing and manual blocks.</p>
+          {availabilityStatus ? <div className="status-banner">{availabilityStatus}</div> : null}
+          <div className="stack-sm">
+            {availability.rows.map((row, index) => {
+              const draft = availabilityDrafts[row.id] ?? {
+                startMinutes: row.fields.startMinutes,
+                endMinutes: row.fields.endMinutes,
+              };
+              const weekdayLabel = WEEKDAYS.find((weekday) => weekday.value === row.fields.weekday)?.label ?? "Day";
+              const windowLabel = index > 0 && availability.rows[index - 1]?.fields.weekday === row.fields.weekday ? "Window 2" : "Window 1";
+
+              return (
+                <div className="range-card" key={row.id}>
+                  <span className="eyebrow">
+                    {weekdayLabel} · {windowLabel}
+                  </span>
+                  <RangeEditor
+                    minMinutes={6 * 60}
+                    maxMinutes={22 * 60}
+                    step={30}
+                    minDurationMinutes={60}
+                    startMinutes={draft.startMinutes}
+                    endMinutes={draft.endMinutes}
+                    onChange={(next) =>
+                      setAvailabilityDrafts((current) => ({
+                        ...current,
+                        [row.id]: {
+                          startMinutes: next.startMinutes,
+                          endMinutes: next.endMinutes,
+                        },
+                      }))
+                    }
+                  />
+                  <button
+                    className="button button--ghost"
+                    onClick={async () => {
+                      try {
+                        await updateBaseAvailabilityWindow(row, draft);
+                        setAvailabilityStatus(`Saved ${weekdayLabel.toLowerCase()} availability.`);
+                      } catch (error) {
+                        console.error("[breathe debug] provider-dashboard:update-base-availability-failed", error);
+                        setAvailabilityStatus(`Could not save ${weekdayLabel.toLowerCase()} availability.`);
+                      }
+                    }}
+                    type="button"
+                  >
+                    Save window
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
         <section className="panel">
           <p className="eyebrow">New client</p>
           <h2>Generate invite link</h2>
