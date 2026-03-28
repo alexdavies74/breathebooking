@@ -1,0 +1,138 @@
+import type { RowHandle } from "@vennbase/core";
+import { describe, expect, it } from "vitest";
+import { buildClientWeekBlocks, createBookingDraftFromBlock, findNextMatchingSlot } from "./availability";
+import type { Schema } from "../lib/schema";
+import { minutesFromTimestamp, toDayKey } from "./date";
+
+function row<TCollection extends keyof Schema & string>(
+  collection: TCollection,
+  id: string,
+  fields: Record<string, unknown>,
+): RowHandle<Schema, TCollection> {
+  return {
+    id,
+    collection,
+    fields,
+    ref: { id, collection, baseUrl: "http://localhost:5173" },
+  } as unknown as RowHandle<Schema, TCollection>;
+}
+
+describe("availability engine", () => {
+  it("creates maybe blocks when an earliest start exists", () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const weekday = today.getDay();
+
+    const blocks = buildClientWeekBlocks({
+      allowedWindows: [
+        row("clientAllowedWindows", "window-1", {
+          weekday,
+          startMinutes: 9 * 60,
+          endMinutes: 13 * 60,
+          earliestStartMinutes: 8 * 60 + 30,
+          sortKey: 1,
+        }),
+      ],
+      sessions: [],
+      publicBusyWindows: [],
+      client: row("clients", "client-1", {
+        fullName: "A",
+        email: "a@example.com",
+        address: "Somewhere",
+        status: "active",
+        minimumDurationMinutes: 180,
+        travelBeforeMin: 20,
+        travelBeforeMax: 40,
+        travelAfterMin: 10,
+        travelAfterMax: 20,
+        earlyStartEnabled: true,
+      }),
+      horizonDays: 1,
+    });
+
+    expect(blocks.map((block) => block.state)).toEqual(["maybe", "available"]);
+  });
+
+  it("removes availability when busy windows overlap", () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const weekday = today.getDay();
+
+    const blocks = buildClientWeekBlocks({
+      allowedWindows: [
+        row("clientAllowedWindows", "window-1", {
+          weekday,
+          startMinutes: 9 * 60,
+          endMinutes: 14 * 60,
+          sortKey: 1,
+        }),
+      ],
+      sessions: [],
+      publicBusyWindows: [
+        row("publicBusyWindows", "busy-1", {
+          startsAt: today.getTime() + 10 * 60 * 60 * 1000,
+          endsAt: today.getTime() + 12 * 60 * 60 * 1000,
+          kind: "session",
+          originRef: "other-session",
+          label: "Unavailable",
+        }),
+      ],
+      client: row("clients", "client-1", {
+        fullName: "A",
+        email: "a@example.com",
+        address: "Somewhere",
+        status: "active",
+        minimumDurationMinutes: 180,
+        travelBeforeMin: 20,
+        travelBeforeMax: 40,
+        travelAfterMin: 10,
+        travelAfterMax: 20,
+        earlyStartEnabled: true,
+      }),
+      horizonDays: 1,
+    });
+
+    expect(blocks.some((block) => block.state === "booked-other")).toBe(true);
+    expect(blocks.filter((block) => block.state === "available")).toHaveLength(2);
+  });
+
+  it("matches the next slot by weekday and duration", () => {
+    const block = {
+      id: "block-1",
+      dayKey: "2026-03-30",
+      startsAt: new Date("2026-03-30T09:00:00").getTime(),
+      endsAt: new Date("2026-03-30T13:00:00").getTime(),
+      state: "available" as const,
+      interactive: true,
+      guaranteedStartAt: new Date("2026-03-30T09:00:00").getTime(),
+    };
+
+    const found = findNextMatchingSlot([block], {
+      weekday: 1,
+      startMinutes: 9 * 60,
+      durationMinutes: 180,
+    });
+
+    expect(found?.id).toBe("block-1");
+  });
+
+  it("anchors booking drafts to the selected block day", () => {
+    const draft = createBookingDraftFromBlock(
+      {
+        id: "block-1",
+        dayKey: "2026-03-30",
+        startsAt: new Date("2026-03-30T08:30:00").getTime(),
+        endsAt: new Date("2026-03-30T13:00:00").getTime(),
+        state: "maybe",
+        interactive: true,
+        guaranteedStartAt: new Date("2026-03-30T09:00:00").getTime(),
+        earliestStartAt: new Date("2026-03-30T08:30:00").getTime(),
+      },
+      180,
+      { weekday: 1, startMinutes: 9 * 60, durationMinutes: 180, earliestStartMinutes: 8 * 60 + 30 },
+    );
+
+    expect(toDayKey(draft.guaranteedStartAt)).toBe("2026-03-30");
+    expect(minutesFromTimestamp(draft.guaranteedStartAt)).toBe(9 * 60);
+  });
+});

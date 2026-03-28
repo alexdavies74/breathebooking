@@ -1,0 +1,336 @@
+import type { RowHandle } from "@vennbase/core";
+import type { Schema } from "../lib/schema";
+import {
+  addDays,
+  formatDayLabel,
+  formatTime,
+  minutesFromTimestamp,
+  overlaps,
+  timestampFromDayAndMinutes,
+  toDayKey,
+  weekdayFromTimestamp,
+  startOfToday,
+} from "./date";
+import type { BookingDraft, SlotShape, WeekBlock } from "./types";
+
+type AvailabilityRow = RowHandle<Schema, "baseAvailabilityWindows">;
+type AllowedWindowRow = RowHandle<Schema, "clientAllowedWindows">;
+type SessionRow = RowHandle<Schema, "sessions">;
+type PersonalBlockRow = RowHandle<Schema, "personalBlocks">;
+type BusyWindowRow = RowHandle<Schema, "publicBusyWindows">;
+type PresetRow = RowHandle<Schema, "rebookingPresets">;
+type ClientRow = RowHandle<Schema, "clients">;
+
+interface DayWindow {
+  id: string;
+  dayStart: number;
+  start: number;
+  end: number;
+  earliestStart?: number;
+}
+
+function toDayWindowsFromBase(rows: AvailabilityRow[], horizonDays: number): DayWindow[] {
+  const today = startOfToday();
+  const windows: DayWindow[] = [];
+
+  for (let offset = 0; offset < horizonDays; offset += 1) {
+    const dayStart = addDays(today, offset);
+    const weekday = weekdayFromTimestamp(dayStart);
+
+    rows
+      .filter((row) => row.fields.weekday === weekday)
+      .forEach((row) => {
+        windows.push({
+          id: `${row.id}-${offset}`,
+          dayStart,
+          start: timestampFromDayAndMinutes(dayStart, row.fields.startMinutes),
+          end: timestampFromDayAndMinutes(dayStart, row.fields.endMinutes),
+        });
+      });
+  }
+
+  return windows;
+}
+
+function toDayWindowsFromClient(rows: AllowedWindowRow[], horizonDays: number): DayWindow[] {
+  const today = startOfToday();
+  const windows: DayWindow[] = [];
+
+  for (let offset = 0; offset < horizonDays; offset += 1) {
+    const dayStart = addDays(today, offset);
+    const weekday = weekdayFromTimestamp(dayStart);
+
+    rows
+      .filter((row) => row.fields.weekday === weekday)
+      .forEach((row) => {
+        windows.push({
+          id: `${row.id}-${offset}`,
+          dayStart,
+          start: timestampFromDayAndMinutes(dayStart, row.fields.startMinutes),
+          end: timestampFromDayAndMinutes(dayStart, row.fields.endMinutes),
+          earliestStart:
+            row.fields.earliestStartMinutes === undefined
+              ? undefined
+              : timestampFromDayAndMinutes(dayStart, row.fields.earliestStartMinutes),
+        });
+      });
+  }
+
+  return windows;
+}
+
+function subtractRange(windows: DayWindow[], start: number, end: number): DayWindow[] {
+  const next: DayWindow[] = [];
+
+  windows.forEach((window) => {
+    if (!overlaps(window.start, window.end, start, end)) {
+      next.push(window);
+      return;
+    }
+
+    if (start > window.start) {
+      next.push({
+        ...window,
+        id: `${window.id}-left-${start}`,
+        end: start,
+      });
+    }
+
+    if (end < window.end) {
+      next.push({
+        ...window,
+        id: `${window.id}-right-${end}`,
+        start: end,
+        earliestStart:
+          window.earliestStart !== undefined && window.earliestStart < end
+            ? undefined
+            : window.earliestStart,
+      });
+    }
+  });
+
+  return next;
+}
+
+function toBookedOwnBlock(session: SessionRow): WeekBlock {
+  const startsAt = session.fields.earliestStartAt ?? session.fields.guaranteedStartAt;
+  const endsAt = session.fields.guaranteedStartAt + session.fields.durationMinutes * 60 * 1000;
+
+  return {
+    id: session.id,
+    dayKey: toDayKey(startsAt),
+    startsAt,
+    endsAt,
+    state: "booked-own",
+    interactive: true,
+    label: session.fields.slotLabel,
+    guaranteedStartAt: session.fields.guaranteedStartAt,
+    earliestStartAt: session.fields.earliestStartAt,
+    sessionRef: session.ref,
+  };
+}
+
+function createAvailableBlock(window: DayWindow): WeekBlock[] {
+  if (window.earliestStart !== undefined && window.earliestStart < window.start) {
+    return [
+      {
+        id: `${window.id}-maybe`,
+        dayKey: toDayKey(window.dayStart),
+        startsAt: window.earliestStart,
+        endsAt: window.start,
+        state: "maybe",
+        interactive: true,
+        label: `From ${formatTime(window.earliestStart)} if traffic is light`,
+        guaranteedStartAt: window.start,
+        earliestStartAt: window.earliestStart,
+      },
+      {
+        id: `${window.id}-available`,
+        dayKey: toDayKey(window.dayStart),
+        startsAt: window.start,
+        endsAt: window.end,
+        state: "available",
+        interactive: true,
+        label: `${formatDayLabel(window.dayStart)} open`,
+        guaranteedStartAt: window.start,
+      },
+    ];
+  }
+
+  return [
+    {
+      id: `${window.id}-available`,
+      dayKey: toDayKey(window.dayStart),
+      startsAt: window.start,
+      endsAt: window.end,
+      state: "available",
+      interactive: true,
+      label: `${formatDayLabel(window.dayStart)} open`,
+      guaranteedStartAt: window.start,
+    },
+  ];
+}
+
+function activeSessions(rows: SessionRow[]): SessionRow[] {
+  return rows.filter((row) => row.fields.status !== "canceled");
+}
+
+function activeBusyWindows(rows: BusyWindowRow[]): BusyWindowRow[] {
+  return rows.filter((row) => row.fields.kind !== "inactive");
+}
+
+function toBlockedBlock(row: BusyWindowRow, ownSessionIds: Set<string>): WeekBlock {
+  return {
+    id: row.id,
+    dayKey: toDayKey(row.fields.startsAt),
+    startsAt: row.fields.startsAt,
+    endsAt: row.fields.endsAt,
+    state: ownSessionIds.has(row.fields.originRef) ? "booked-own" : "booked-other",
+    interactive: ownSessionIds.has(row.fields.originRef),
+    label: ownSessionIds.has(row.fields.originRef) ? row.fields.label : "Unavailable",
+  };
+}
+
+export function buildProviderWeekBlocks(args: {
+  baseAvailability: AvailabilityRow[];
+  personalBlocks: PersonalBlockRow[];
+  sessions: SessionRow[];
+  horizonDays: number;
+}): WeekBlock[] {
+  const windows = toDayWindowsFromBase(args.baseAvailability, args.horizonDays);
+  const providerBlocks = args.personalBlocks
+    .filter((row) => row.fields.source !== "inactive")
+    .map<WeekBlock>((row) => ({
+      id: row.id,
+      dayKey: toDayKey(row.fields.startsAt),
+      startsAt: row.fields.startsAt,
+      endsAt: row.fields.endsAt,
+      state: "blocked",
+      interactive: true,
+      label: row.fields.label ?? "Personal block",
+    }));
+
+  const sessionBlocks = activeSessions(args.sessions).map((session) => toBookedOwnBlock(session));
+
+  return [...windows.flatMap(createAvailableBlock), ...providerBlocks, ...sessionBlocks].sort(
+    (left, right) => left.startsAt - right.startsAt,
+  );
+}
+
+export function buildClientWeekBlocks(args: {
+  allowedWindows: AllowedWindowRow[];
+  sessions: SessionRow[];
+  publicBusyWindows: BusyWindowRow[];
+  client: ClientRow;
+  horizonDays: number;
+}): WeekBlock[] {
+  let windows = toDayWindowsFromClient(args.allowedWindows, args.horizonDays);
+  const sessions = activeSessions(args.sessions);
+  const busyWindows = activeBusyWindows(args.publicBusyWindows);
+
+  busyWindows.forEach((row) => {
+    windows = subtractRange(windows, row.fields.startsAt, row.fields.endsAt);
+  });
+
+  const ownSessionIds = new Set(sessions.map((session) => session.id));
+  const sessionBlocks = sessions.map((session) => toBookedOwnBlock(session));
+  const blockedBlocks = busyWindows
+    .filter((row) => !ownSessionIds.has(row.fields.originRef))
+    .map((row) => toBlockedBlock(row, ownSessionIds));
+
+  return [...windows.flatMap(createAvailableBlock), ...sessionBlocks, ...blockedBlocks].sort(
+    (left, right) => left.startsAt - right.startsAt,
+  );
+}
+
+export function createBookingDraftFromBlock(
+  block: WeekBlock,
+  minimumDurationMinutes: number,
+  previousShape?: SlotShape,
+): BookingDraft {
+  const dayStart = new Date(`${block.dayKey}T00:00:00`).getTime();
+  const preferredStart = previousShape
+    ? timestampFromDayAndMinutes(dayStart, previousShape.startMinutes)
+    : undefined;
+  const baseStart = previousShape
+    ? Math.max(block.guaranteedStartAt ?? block.startsAt, preferredStart ?? block.startsAt)
+    : block.guaranteedStartAt ?? block.startsAt;
+  const durationMinutes = previousShape?.durationMinutes ?? minimumDurationMinutes;
+  const guaranteedStartAt = block.guaranteedStartAt ?? baseStart;
+  const startsAt = block.earliestStartAt ?? guaranteedStartAt;
+
+  return {
+    startsAt,
+    guaranteedStartAt,
+    earliestStartAt: block.earliestStartAt,
+    endsAt: guaranteedStartAt + durationMinutes * 60 * 1000,
+    durationMinutes,
+    dayKey: block.dayKey,
+    sourceBlockId: block.id,
+  };
+}
+
+export function createBookingDraftFromPreviousSession(session: SessionRow): BookingDraft {
+  const startsAt = session.fields.earliestStartAt ?? session.fields.guaranteedStartAt;
+  return {
+    startsAt,
+    guaranteedStartAt: session.fields.guaranteedStartAt,
+    earliestStartAt: session.fields.earliestStartAt,
+    endsAt: session.fields.guaranteedStartAt + session.fields.durationMinutes * 60 * 1000,
+    durationMinutes: session.fields.durationMinutes,
+    dayKey: toDayKey(startsAt),
+    sourceBlockId: session.id,
+  };
+}
+
+export function toSlotShapeFromSession(session: SessionRow): SlotShape {
+  return {
+    weekday: weekdayFromTimestamp(session.fields.guaranteedStartAt),
+    startMinutes: minutesFromTimestamp(session.fields.guaranteedStartAt),
+    durationMinutes: session.fields.durationMinutes,
+    earliestStartMinutes:
+      session.fields.earliestStartAt === undefined
+        ? undefined
+        : minutesFromTimestamp(session.fields.earliestStartAt),
+  };
+}
+
+export function findNextMatchingSlot(blocks: WeekBlock[], shape: SlotShape): WeekBlock | null {
+  return (
+    blocks.find((block) => {
+      if (block.state !== "available" && block.state !== "maybe") {
+        return false;
+      }
+
+      return (
+        weekdayFromTimestamp(block.guaranteedStartAt ?? block.startsAt) === shape.weekday &&
+        minutesFromTimestamp(block.guaranteedStartAt ?? block.startsAt) === shape.startMinutes &&
+        Math.round((block.endsAt - (block.guaranteedStartAt ?? block.startsAt)) / (60 * 1000)) >=
+          shape.durationMinutes
+      );
+    }) ?? null
+  );
+}
+
+export function dedupePresetShapes(rows: PresetRow[]): SlotShape[] {
+  const seen = new Set<string>();
+  const shapes: SlotShape[] = [];
+
+  rows
+    .sort((left, right) => right.fields.lastUsedAt - left.fields.lastUsedAt)
+    .forEach((row) => {
+      const key = `${row.fields.weekday}:${row.fields.startMinutes}:${row.fields.durationMinutes}:${row.fields.earliestStartMinutes ?? ""}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      shapes.push({
+        weekday: row.fields.weekday,
+        startMinutes: row.fields.startMinutes,
+        durationMinutes: row.fields.durationMinutes,
+        earliestStartMinutes: row.fields.earliestStartMinutes,
+      });
+    });
+
+  return shapes;
+}
