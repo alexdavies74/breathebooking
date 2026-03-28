@@ -193,10 +193,13 @@ select {
 
 .week-view {
   display: grid;
-  grid-template-columns: 72px repeat(7, minmax(180px, 1fr));
+  grid-template-columns: 72px;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(180px, 1fr);
   gap: 0.9rem;
   overflow-x: auto;
   padding-bottom: 0.5rem;
+  align-items: start;
 }
 
 .time-axis {

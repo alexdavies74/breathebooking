@@ -47,4 +47,37 @@ describe("WeekView", () => {
     expect(onSelectBlock).toHaveBeenCalled();
     expect(onSelectSession).toHaveBeenCalled();
   });
+
+  it("requests more days when scrolled near the end", () => {
+    const dayKey = toDayKey(Date.now());
+    const onExtendHorizon = vi.fn();
+
+    const { container } = render(
+      <WeekView
+        role="provider"
+        blocks={[
+          {
+            id: "available-1",
+            dayKey,
+            startsAt: new Date(`${dayKey}T09:00:00`).getTime(),
+            endsAt: new Date(`${dayKey}T13:00:00`).getTime(),
+            state: "available",
+            interactive: true,
+            label: "Open",
+          },
+        ]}
+        horizonDays={7}
+        onExtendHorizon={onExtendHorizon}
+      />,
+    );
+
+    const weekView = container.querySelector(".week-view") as HTMLDivElement;
+    Object.defineProperty(weekView, "scrollWidth", { configurable: true, value: 2000 });
+    Object.defineProperty(weekView, "clientWidth", { configurable: true, value: 1000 });
+    Object.defineProperty(weekView, "scrollLeft", { configurable: true, value: 760 });
+
+    weekView.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onExtendHorizon).toHaveBeenCalledWith(14);
+  });
 });

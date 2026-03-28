@@ -27,6 +27,7 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   const { clientId } = useParams();
   const [searchParams] = useSearchParams();
   const providerIdFromUrl = searchParams.get("providerId");
+  const [horizonDays, setHorizonDays] = useState(14);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -67,9 +68,9 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
       sessions: sessions.rows,
       publicBusyWindows: publicBusyWindows.rows,
       client: client.data,
-      horizonDays: 7,
+      horizonDays,
     });
-  }, [allowedWindows.rows, client.data, publicBusyWindows.rows, sessions.rows]);
+  }, [allowedWindows.rows, client.data, horizonDays, publicBusyWindows.rows, sessions.rows]);
 
   const activeSessions = useMemo(
     () =>
@@ -205,6 +206,8 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
           role="client"
           blocks={blocks}
           selectedDraft={draft}
+          horizonDays={horizonDays}
+          onExtendHorizon={setHorizonDays}
           onSelectBlock={(block) => {
             if (!client.data) {
               return;

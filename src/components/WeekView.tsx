@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { clamp, formatDayLabel, formatTime, startOfToday, toDayKey } from "../domain/date";
 import type { BookingDraft, Role, WeekBlock } from "../domain/types";
 
@@ -8,6 +9,7 @@ interface WeekViewProps {
   onSelectBlock?: (block: WeekBlock) => void;
   onSelectSession?: (block: WeekBlock) => void;
   horizonDays?: number;
+  onExtendHorizon?: (nextHorizonDays: number) => void;
 }
 
 const DAY_START_MINUTES = 6 * 60;
@@ -54,7 +56,9 @@ export function WeekView({
   onSelectBlock,
   onSelectSession,
   horizonDays = 7,
+  onExtendHorizon,
 }: WeekViewProps) {
+  const requestRef = useRef(horizonDays);
   const today = startOfToday();
   const dayKeys = Array.from({ length: horizonDays }, (_, index) => toDayKey(today + index * 86400000));
   const hourMarkers = Array.from(
@@ -68,8 +72,34 @@ export function WeekView({
     grouped.get(block.dayKey)?.push(block);
   });
 
+  useEffect(() => {
+    requestRef.current = horizonDays;
+  }, [horizonDays]);
+
+  function maybeExtendHorizon(container: HTMLDivElement) {
+    if (!onExtendHorizon) {
+      return;
+    }
+
+    const remaining = container.scrollWidth - container.clientWidth - container.scrollLeft;
+    if (remaining > 280) {
+      return;
+    }
+
+    const nextHorizonDays = horizonDays + 7;
+    if (requestRef.current >= nextHorizonDays) {
+      return;
+    }
+
+    requestRef.current = nextHorizonDays;
+    onExtendHorizon(nextHorizonDays);
+  }
+
   return (
-    <div className="week-view">
+    <div
+      className="week-view"
+      onScroll={(event) => maybeExtendHorizon(event.currentTarget)}
+    >
       <div className="time-axis">
         <div className="time-axis__header" />
         <div className="time-axis__canvas">
@@ -108,9 +138,7 @@ export function WeekView({
                   key={block.id}
                   className={`week-block week-block--${block.state}`}
                   style={blockPosition(block)}
-                  onClick={() =>
-                    resolveAction(block, { role, blocks, selectedDraft, onSelectBlock, onSelectSession, horizonDays })
-                  }
+                  onClick={() => resolveAction(block, { role, blocks, selectedDraft, onSelectBlock, onSelectSession, horizonDays })}
                   type="button"
                   disabled={!block.interactive}
                 >

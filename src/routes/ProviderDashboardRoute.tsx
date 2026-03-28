@@ -36,6 +36,7 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
     enabled: Boolean(session.session?.signedIn),
   });
   const provider = savedProvider.data ?? null;
+  const [horizonDays, setHorizonDays] = useState(14);
   const [calendarStatus, setCalendarStatus] = useState("Calendar sync is stubbed for v1.");
   const availability = useQuery(
     db,
@@ -92,9 +93,9 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
       baseAvailability: availability.rows,
       personalBlocks: personalBlocks.rows,
       sessions: sessions.rows,
-      horizonDays: 7,
+      horizonDays,
     });
-  }, [availability.rows, personalBlocks.rows, sessions.rows]);
+  }, [availability.rows, horizonDays, personalBlocks.rows, sessions.rows]);
 
   useEffect(() => {
     if (!provider && currentUser.data?.username) {
@@ -136,26 +137,6 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
     });
   }, [availability.rows]);
 
-  useEffect(() => {
-    console.info("[breathe debug] provider-dashboard:state", {
-      signedIn: session.session?.signedIn ?? false,
-      savedProviderStatus: savedProvider.status,
-      hasProvider: Boolean(provider),
-      savedProviderError: savedProvider.error,
-      savedProviderRefreshError: savedProvider.refreshError,
-      currentUserStatus: currentUser.status,
-      currentUsername: currentUser.data?.username,
-    });
-  }, [
-    currentUser.data?.username,
-    currentUser.status,
-    provider,
-    savedProvider.error,
-    savedProvider.refreshError,
-    savedProvider.status,
-    session.session?.signedIn,
-  ]);
-
   if (!session.session?.signedIn) {
     return (
       <div className="panel">
@@ -183,24 +164,13 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
           onClick={async () => {
             const nextPracticeName = practiceName || "Breathe Practice";
             const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            console.info("[breathe debug] provider-dashboard:create-practice-click", {
-              nextPracticeName,
-              timezone,
-              signedIn: session.session?.signedIn ?? false,
-              hasProviderBeforeCreate: Boolean(provider),
-              currentUsername: currentUser.data?.username,
-            });
-            setCreatePracticeStatus("Creating practice. Check the console for debug logs.");
+            setCreatePracticeStatus("Creating practice…");
 
             try {
               const nextProvider = await createPractice(nextPracticeName, timezone);
-              console.info("[breathe debug] provider-dashboard:create-practice-success", {
-                providerId: nextProvider.id,
-              });
               await savedProvider.save(nextProvider);
               setCreatePracticeStatus(`Create practice succeeded for ${nextPracticeName}.`);
             } catch (error) {
-              console.error("[breathe debug] provider-dashboard:create-practice-failed", error);
               setCreatePracticeStatus("Create practice failed. Open the console and send me the error.");
             }
           }}
@@ -223,7 +193,7 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
           <div className="sync-pill">Manual sync only · {calendarStatus}</div>
         </div>
 
-        <WeekView role="provider" blocks={blocks} />
+        <WeekView role="provider" blocks={blocks} horizonDays={horizonDays} onExtendHorizon={setHorizonDays} />
       </section>
 
       <aside className="stack">
@@ -270,7 +240,6 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
                         await updateBaseAvailabilityWindow(row, draft);
                         setAvailabilityStatus(`Saved ${weekdayLabel.toLowerCase()} availability.`);
                       } catch (error) {
-                        console.error("[breathe debug] provider-dashboard:update-base-availability-failed", error);
                         setAvailabilityStatus(`Could not save ${weekdayLabel.toLowerCase()} availability.`);
                       }
                     }}
