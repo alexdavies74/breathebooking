@@ -38,20 +38,63 @@ const DEFAULT_PROVIDER_WINDOWS = [
 ];
 
 export async function createPractice(displayName: string, timezone: string) {
+  console.info("[breathe debug] createPractice:start", {
+    displayName,
+    timezone,
+  });
+
   const providerWrite = db.create("providers", {
     displayName,
     timezone,
     defaultWeekHorizon: 4,
   });
-  const provider = await providerWrite.committed;
+  console.info("[breathe debug] createPractice:optimistic-write", {
+    status: providerWrite.status,
+    optimisticProviderId: providerWrite.value.id,
+  });
 
-  await Promise.all(
-    DEFAULT_PROVIDER_WINDOWS.map((window) =>
-      db.create("baseAvailabilityWindows", window, { in: provider }).committed,
-    ),
-  );
+  try {
+    const provider = await providerWrite.committed;
+    console.info("[breathe debug] createPractice:provider-committed", {
+      providerId: provider.id,
+      owner: provider.owner,
+    });
 
-  return provider;
+    await Promise.all(
+      DEFAULT_PROVIDER_WINDOWS.map(async (window) => {
+        console.info("[breathe debug] createPractice:availability-start", {
+          providerId: provider.id,
+          weekday: window.weekday,
+          startMinutes: window.startMinutes,
+          endMinutes: window.endMinutes,
+        });
+        const availabilityWrite = db.create("baseAvailabilityWindows", window, { in: provider });
+        console.info("[breathe debug] createPractice:availability-optimistic-write", {
+          providerId: provider.id,
+          availabilityStatus: availabilityWrite.status,
+          optimisticAvailabilityId: availabilityWrite.value.id,
+          weekday: window.weekday,
+        });
+        const availabilityRow = await availabilityWrite.committed;
+        console.info("[breathe debug] createPractice:availability-committed", {
+          availabilityId: availabilityRow.id,
+          weekday: window.weekday,
+          startMinutes: window.startMinutes,
+          endMinutes: window.endMinutes,
+        });
+      }),
+    );
+
+    console.info("[breathe debug] createPractice:complete", {
+      providerId: provider.id,
+      availabilityCount: DEFAULT_PROVIDER_WINDOWS.length,
+    });
+
+    return provider;
+  } catch (error) {
+    console.error("[breathe debug] createPractice:error", error);
+    throw error;
+  }
 }
 
 export async function createClientInvite(provider: ProviderRow, input: ClientConfigInput) {

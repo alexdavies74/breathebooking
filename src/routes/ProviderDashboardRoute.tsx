@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
+import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
-import { useCurrentUser, useQuery } from "@vennbase/react";
+import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
 import { createClientInvite, createPersonalBlock, createPractice } from "../domain/actions";
 import { buildProviderWeekBlocks } from "../domain/availability";
 import { manualCalendarSyncAdapter } from "../domain/calendarSync";
@@ -9,7 +10,7 @@ import { formatTime, minutesFromTimestamp, timestampFromDayAndMinutes } from "..
 import { RangeEditor } from "../components/RangeEditor";
 import { WeekView } from "../components/WeekView";
 import { db } from "../lib/db";
-import { savePreference } from "../lib/puterClient";
+import type { Schema } from "../lib/schema";
 
 interface ProviderDashboardRouteProps {
   session: UseSessionResult;
@@ -25,8 +26,11 @@ const WEEKDAYS = [
 
 export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps) {
   const currentUser = useCurrentUser(db, { enabled: Boolean(session.session?.signedIn) });
-  const providers = useQuery(db, "providers", { index: "byDisplayName", order: "asc" }, { enabled: Boolean(session.session?.signedIn) });
-  const provider = providers.rows[0] ?? null;
+  const savedProvider = useSavedRow<Schema, RowHandle<Schema, "providers">>(db, {
+    key: "active-provider",
+    enabled: Boolean(session.session?.signedIn),
+  });
+  const provider = savedProvider.data ?? null;
   const [calendarStatus, setCalendarStatus] = useState("Calendar sync is stubbed for v1.");
   const availability = useQuery(
     db,
@@ -48,6 +52,7 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
   const [practiceName, setPracticeName] = useState("");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [inviteQr, setInviteQr] = useState<string | null>(null);
+  const [createPracticeStatus, setCreatePracticeStatus] = useState<string | null>(null);
   const [clientForm, setClientForm] = useState({
     fullName: "",
     email: "",
@@ -85,10 +90,10 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
   }, [availability.rows, personalBlocks.rows, sessions.rows]);
 
   useEffect(() => {
-    if (providers.rows.length === 0 && currentUser.data?.username) {
+    if (!provider && currentUser.data?.username) {
       setPracticeName(`${currentUser.data.username}'s care practice`);
     }
-  }, [currentUser.data?.username, providers.rows.length]);
+  }, [currentUser.data?.username, provider]);
 
   useEffect(() => {
     if (!inviteLink) {
@@ -104,6 +109,26 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
       setCalendarStatus(status.enabled ? "Calendar sync connected." : "Calendar sync is stubbed for v1.");
     });
   }, []);
+
+  useEffect(() => {
+    console.info("[breathe debug] provider-dashboard:state", {
+      signedIn: session.session?.signedIn ?? false,
+      savedProviderStatus: savedProvider.status,
+      hasProvider: Boolean(provider),
+      savedProviderError: savedProvider.error,
+      savedProviderRefreshError: savedProvider.refreshError,
+      currentUserStatus: currentUser.status,
+      currentUsername: currentUser.data?.username,
+    });
+  }, [
+    currentUser.data?.username,
+    currentUser.status,
+    provider,
+    savedProvider.error,
+    savedProvider.refreshError,
+    savedProvider.status,
+    session.session?.signedIn,
+  ]);
 
   if (!session.session?.signedIn) {
     return (
@@ -126,11 +151,32 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
           <span>Display name</span>
           <input value={practiceName} onChange={(event) => setPracticeName(event.target.value)} />
         </label>
+        {createPracticeStatus ? <div className="status-banner">{createPracticeStatus}</div> : null}
         <button
           className="button"
           onClick={async () => {
-            const nextProvider = await createPractice(practiceName || "Breathe Practice", Intl.DateTimeFormat().resolvedOptions().timeZone);
-            await savePreference("last-provider-id", nextProvider.id);
+            const nextPracticeName = practiceName || "Breathe Practice";
+            const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            console.info("[breathe debug] provider-dashboard:create-practice-click", {
+              nextPracticeName,
+              timezone,
+              signedIn: session.session?.signedIn ?? false,
+              hasProviderBeforeCreate: Boolean(provider),
+              currentUsername: currentUser.data?.username,
+            });
+            setCreatePracticeStatus("Creating practice. Check the console for debug logs.");
+
+            try {
+              const nextProvider = await createPractice(nextPracticeName, timezone);
+              console.info("[breathe debug] provider-dashboard:create-practice-success", {
+                providerId: nextProvider.id,
+              });
+              await savedProvider.save(nextProvider);
+              setCreatePracticeStatus(`Create practice succeeded for ${nextPracticeName}.`);
+            } catch (error) {
+              console.error("[breathe debug] provider-dashboard:create-practice-failed", error);
+              setCreatePracticeStatus("Create practice failed. Open the console and send me the error.");
+            }
           }}
           type="button"
         >
