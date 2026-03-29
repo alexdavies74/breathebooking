@@ -153,6 +153,10 @@ describe("provider routes", () => {
       "href",
       "/provider/clients/client-1/settings",
     );
+    expect(screen.getByRole("link", { name: "Open client view" })).toHaveAttribute(
+      "href",
+      "/client/client-1?providerId=provider-1&providerBaseUrl=http%3A%2F%2Flocalhost",
+    );
   });
 
   it("denies access to client settings for non-owners", () => {

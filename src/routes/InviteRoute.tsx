@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { UseSessionResult } from "@vennbase/react";
 import { useAcceptInviteFromUrl } from "@vennbase/react";
+import { buildClientHomePath } from "../lib/clientAccess";
 import { db } from "../lib/db";
 
 interface InviteRouteProps {
@@ -18,11 +19,13 @@ export function InviteRoute({ session }: InviteRouteProps) {
   const accept = useAcceptInviteFromUrl(db, {
     enabled: Boolean(session.session?.signedIn && clientId),
     onOpen: async (provider) => {
-      const nextParams = new URLSearchParams({
-        providerId: provider.id,
-        providerBaseUrl: provider.ref.baseUrl,
-      });
-      navigate(`/client/${clientId}?${nextParams.toString()}`);
+      navigate(
+        buildClientHomePath({
+          clientId: clientId!,
+          providerId: provider.id,
+          providerBaseUrl: provider.ref.baseUrl,
+        }),
+      );
     },
   });
 

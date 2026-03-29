@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useParams } from "react-router-dom";
 import type { RowRef } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
@@ -15,6 +15,7 @@ import {
 } from "../domain/availability";
 import { addDays, formatDayLabel, formatDuration, formatTime, minutesFromTimestamp } from "../domain/date";
 import { WeekView } from "../components/WeekView";
+import { findSavedClientAccess, saveClientAccess } from "../lib/clientAccess";
 import { db } from "../lib/db";
 import { makeRowRef } from "../lib/rowRef";
 import type { Schema } from "../lib/schema";
@@ -34,12 +35,34 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [draft, setDraft] = useState<ReturnType<typeof createBookingDraftFromBlock> | null>(null);
+  const [savedAccess, setSavedAccess] = useState<Awaited<ReturnType<typeof findSavedClientAccess>> | undefined>(undefined);
+  const needsSavedAccess = Boolean(clientId && (!providerIdFromUrl || !providerBaseUrlFromUrl));
 
-  const providerRef: RowRef<"providers"> | undefined = providerIdFromUrl
-    ? providerBaseUrlFromUrl
-      ? makeRowRef("providers", providerIdFromUrl, providerBaseUrlFromUrl)
-      : undefined
-    : undefined;
+  useEffect(() => {
+    if (!needsSavedAccess || !clientId) {
+      setSavedAccess(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void findSavedClientAccess(clientId).then((nextSavedAccess) => {
+      if (!isCancelled) {
+        setSavedAccess(nextSavedAccess);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [clientId, needsSavedAccess]);
+
+  const resolvedProviderId = providerIdFromUrl ?? savedAccess?.providerId;
+  const resolvedProviderBaseUrl = providerBaseUrlFromUrl ?? savedAccess?.providerBaseUrl;
+  const providerRef: RowRef<"providers"> | undefined =
+    resolvedProviderId && resolvedProviderBaseUrl
+      ? makeRowRef("providers", resolvedProviderId, resolvedProviderBaseUrl)
+      : undefined;
   const provider = useRow<Schema, "providers">(db, providerRef);
   const providerClients = useQuery(
     db,
@@ -137,8 +160,45 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     </div>
   ) : null;
 
+  useEffect(() => {
+    if (!provider.data || !client.data) {
+      return;
+    }
+
+    void saveClientAccess({
+      clientId: client.data.id,
+      clientName: client.data.fields.fullName,
+      providerId: provider.data.id,
+      providerName: provider.data.fields.displayName,
+      providerBaseUrl: provider.data.ref.baseUrl,
+    });
+  }, [
+    client.data?.fields.fullName,
+    client.data?.id,
+    provider.data?.fields.displayName,
+    provider.data?.id,
+    provider.data?.ref.baseUrl,
+  ]);
+
   if (signInGate) {
     return signInGate;
+  }
+
+  if (needsSavedAccess && savedAccess === undefined) {
+    return (
+      <div className="panel">
+        <h1>Opening client home…</h1>
+      </div>
+    );
+  }
+
+  if (!providerRef) {
+    return (
+      <div className="panel">
+        <h1>Client booking home</h1>
+        <p>We could not recover the provider workspace for this client. Open the original invite link again.</p>
+      </div>
+    );
   }
 
   function resetBookingSelection() {

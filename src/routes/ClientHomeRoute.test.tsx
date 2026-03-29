@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   createSessionBooking: vi.fn(),
   updateSessionBooking: vi.fn(),
   cancelSession: vi.fn(),
+  findSavedClientAccess: vi.fn(),
+  saveClientAccess: vi.fn(),
 }));
 
 vi.mock("@vennbase/react", () => ({
@@ -23,6 +25,15 @@ vi.mock("../domain/actions", () => ({
   updateSessionBooking: (...args: unknown[]) => mocks.updateSessionBooking(...args),
   cancelSession: (...args: unknown[]) => mocks.cancelSession(...args),
 }));
+
+vi.mock("../lib/clientAccess", async () => {
+  const actual = await vi.importActual<typeof import("../lib/clientAccess")>("../lib/clientAccess");
+  return {
+    ...actual,
+    findSavedClientAccess: (...args: unknown[]) => mocks.findSavedClientAccess(...args),
+    saveClientAccess: (...args: unknown[]) => mocks.saveClientAccess(...args),
+  };
+});
 
 vi.mock("../lib/db", () => ({
   db: {},
@@ -98,6 +109,8 @@ function createSessionRow(id: string, guaranteedStartAt: number) {
 describe("ClientHomeRoute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.findSavedClientAccess.mockResolvedValue(null);
+    mocks.saveClientAccess.mockResolvedValue([]);
     const provider = createProviderRow();
     const client = createClientRow();
 
@@ -143,6 +156,48 @@ describe("ClientHomeRoute", () => {
 
     expect(screen.getAllByText("Mon, Mar 30 open")).toHaveLength(2);
     expect(screen.getAllByText(/open$/).length).toBeGreaterThan(0);
+  });
+
+  it("persists the resolved client workspace for future root visits", async () => {
+    render(
+      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+        <Routes>
+          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByText("Mon, Mar 30 open");
+
+    expect(mocks.saveClientAccess).toHaveBeenCalledWith({
+      clientId: "client-1",
+      clientName: "Casey Client",
+      providerId: "provider-1",
+      providerName: "Provider Practice",
+      providerBaseUrl: "http://localhost",
+    });
+  });
+
+  it("opens a saved client workspace even when the query params are missing", async () => {
+    mocks.findSavedClientAccess.mockResolvedValue({
+      clientId: "client-1",
+      clientName: "Casey Client",
+      providerId: "provider-1",
+      providerName: "Provider Practice",
+      providerBaseUrl: "https://api.puter.com",
+      lastOpenedAt: new Date("2026-03-29T12:00:00Z").getTime(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/client/client-1"]}>
+        <Routes>
+          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findAllByText("Mon, Mar 30 open")).toHaveLength(2);
+    expect(mocks.findSavedClientAccess).toHaveBeenCalledWith("client-1");
   });
 
   it("confirms bookings from the planner instead of showing duplicate range sliders", async () => {

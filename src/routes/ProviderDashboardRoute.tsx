@@ -18,6 +18,7 @@ import { manualCalendarSyncAdapter } from "../domain/calendarSync";
 import { clamp, minutesFromTimestamp, timestampFromDayAndMinutes, toDayKey, weekdayFromTimestamp } from "../domain/date";
 import type { ProviderEditableKind, ProviderRangeDraft, WeekBlock } from "../domain/types";
 import { WeekView } from "../components/WeekView";
+import { buildClientHomePath } from "../lib/clientAccess";
 import { db } from "../lib/db";
 import type { Schema } from "../lib/schema";
 
@@ -393,7 +394,14 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
                   Minimum {client.fields.minimumDurationMinutes / 60}h · Travel {client.fields.travelTimeMinutes} min
                 </p>
                 <div className="row-actions">
-                  <a className="button button--ghost" href={`/client/${client.id}?providerId=${provider.id}`}>
+                  <a
+                    className="button button--ghost"
+                    href={buildClientHomePath({
+                      clientId: client.id,
+                      providerId: provider.id,
+                      providerBaseUrl: provider.ref.baseUrl,
+                    })}
+                  >
                     Open client view
                   </a>
                   <a className="button button--ghost" href={`/provider/clients/${client.id}/settings`}>

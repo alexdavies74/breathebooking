@@ -2,8 +2,8 @@ import { Link, Route, Routes } from "react-router-dom";
 import { useSession } from "@vennbase/react";
 import { db } from "../lib/db";
 import { ClientHomeRoute } from "../routes/ClientHomeRoute";
+import { HomeRoute } from "../routes/HomeRoute";
 import { InviteRoute } from "../routes/InviteRoute";
-import { LandingRoute } from "../routes/LandingRoute";
 import { ProviderClientSettingsRoute } from "../routes/ProviderClientSettingsRoute";
 import { ProviderDashboardRoute } from "../routes/ProviderDashboardRoute";
 
@@ -29,7 +29,7 @@ export function App() {
           </div>
         ) : (
           <Routes>
-            <Route path="/" element={<LandingRoute session={session} />} />
+            <Route path="/" element={<HomeRoute session={session} />} />
             <Route path="/provider" element={<ProviderDashboardRoute session={session} />} />
             <Route path="/provider/clients/:clientId/settings" element={<ProviderClientSettingsRoute session={session} />} />
             <Route path="/invite" element={<InviteRoute session={session} />} />
