@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import QRCode from "qrcode";
 import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
 import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
+import { useNavigate } from "react-router-dom";
 import {
   createBaseAvailabilityWindow,
   createClient,
@@ -55,6 +55,7 @@ function createDraftFromBlock(block: WeekBlock): ProviderRangeDraft | null {
 }
 
 export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps) {
+  const navigate = useNavigate();
   const currentUser = useCurrentUser(db, { enabled: Boolean(session.session?.signedIn) });
   const savedProvider = useSavedRow<Schema, RowHandle<Schema, "providers">>(db, {
     key: "active-provider",
@@ -81,8 +82,6 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
   );
 
   const [practiceName, setPracticeName] = useState("");
-  const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [inviteQr, setInviteQr] = useState<string | null>(null);
   const [createPracticeStatus, setCreatePracticeStatus] = useState<string | null>(null);
   const [clientStatus, setClientStatus] = useState<string | null>(null);
   const [providerEditMode, setProviderEditMode] = useState<ProviderEditableKind>("availability");
@@ -116,15 +115,6 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
   useEffect(() => {
     setProviderDraft(null);
   }, [providerEditMode]);
-
-  useEffect(() => {
-    if (!inviteLink) {
-      setInviteQr(null);
-      return;
-    }
-
-    void QRCode.toDataURL(inviteLink, { margin: 1, width: 240 }).then(setInviteQr);
-  }, [inviteLink]);
 
   useEffect(() => {
     void manualCalendarSyncAdapter.getStatus().then((status) => {
@@ -358,9 +348,9 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
 
                 try {
                   const result = await createClient(provider, { fullName: clientName.trim() });
-                  setInviteLink(result.inviteLink);
                   setClientName("");
-                  setClientStatus(`Created ${result.client.fields.fullName}.`);
+                  setClientStatus(null);
+                  navigate(`/provider/clients/${result.client.id}/settings`);
                 } catch (error) {
                   setClientStatus("Could not create that client.");
                 }
@@ -370,17 +360,6 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
               Create client
             </button>
           </div>
-
-          {inviteLink ? (
-            <div className="invite-card">
-              <span className="eyebrow">Invite ready</span>
-              <a href={inviteLink}>{inviteLink}</a>
-              <button className="button button--ghost" onClick={() => navigator.clipboard.writeText(inviteLink)} type="button">
-                Copy link
-              </button>
-              {inviteQr ? <img alt="Invite QR code" className="qr-code" src={inviteQr} /> : null}
-            </div>
-          ) : null}
         </section>
 
         <section className="panel">

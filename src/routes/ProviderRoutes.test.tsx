@@ -72,7 +72,10 @@ vi.mock("../domain/calendarSync", () => ({
 }));
 
 vi.mock("../lib/db", () => ({
-  db: {},
+  db: {
+    createInviteToken: vi.fn(() => ({ value: { token: "invite-token" } })),
+    createShareLink: vi.fn(() => "http://localhost/share?token=invite-token"),
+  },
 }));
 
 vi.mock("qrcode", () => ({
@@ -140,8 +143,11 @@ describe("provider routes", () => {
     useSavedRow.mockReturnValue({ data: provider, save: vi.fn() });
 
     render(
-      <MemoryRouter>
-        <ProviderDashboardRoute session={createSession() as never} />
+      <MemoryRouter initialEntries={["/provider"]}>
+        <Routes>
+          <Route path="/provider" element={<ProviderDashboardRoute session={createSession() as never} />} />
+          <Route path="/provider/clients/:clientId/settings" element={<div>Client settings route</div>} />
+        </Routes>
       </MemoryRouter>,
     );
 
@@ -149,14 +155,7 @@ describe("provider routes", () => {
     await user.click(screen.getByRole("button", { name: "Create client" }));
 
     expect(createClient).toHaveBeenCalledWith(provider, { fullName: "Casey Client" });
-    expect(screen.getByRole("link", { name: "Client settings" })).toHaveAttribute(
-      "href",
-      "/provider/clients/client-1/settings",
-    );
-    expect(screen.getByRole("link", { name: "Open client view" })).toHaveAttribute(
-      "href",
-      "/client/client-1?providerId=provider-1&providerBaseUrl=http%3A%2F%2Flocalhost",
-    );
+    expect(await screen.findByText("Client settings route")).toBeInTheDocument();
   });
 
   it("denies access to client settings for non-owners", () => {
@@ -186,5 +185,22 @@ describe("provider routes", () => {
     );
 
     expect(screen.getByRole("button", { name: "Save settings" })).toBeInTheDocument();
+  });
+
+  it("shows the invite link and QR on the client settings page", async () => {
+    render(
+      <MemoryRouter initialEntries={["/provider/clients/client-1/settings"]}>
+        <Routes>
+          <Route path="/provider/clients/:clientId/settings" element={<ProviderClientSettingsRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: /http:\/\/localhost\/invite\?/i })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/invite?"),
+    );
+    expect(screen.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
+    expect(await screen.findByAltText("Invite QR code")).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import type { RowHandle } from "@vennbase/core";
 import { db } from "../lib/db";
+import { buildClientInviteLink } from "../lib/clientInvite";
 import type { Schema } from "../lib/schema";
 import { formatDayLabel, formatTime, minutesFromTimestamp, weekdayFromTimestamp } from "./date";
 import type { BookingDraft } from "./types";
@@ -65,14 +66,7 @@ export async function createClient(provider: ProviderRow, input: CreateClientInp
   );
   const client = await clientWrite.committed;
 
-  const token = db.createInviteToken(provider).value;
-  const url = new URL(db.createShareLink(provider, token.token));
-  url.pathname = "/invite";
-  url.searchParams.set("clientId", client.id);
-  url.searchParams.set("clientName", client.fields.fullName);
-  url.searchParams.set("providerName", provider.fields.displayName);
-
-  return { client, inviteLink: url.toString() };
+  return { client, inviteLink: buildClientInviteLink(provider, client) };
 }
 
 export async function updateClientSettings(client: ClientRow, input: ClientSettingsInput) {

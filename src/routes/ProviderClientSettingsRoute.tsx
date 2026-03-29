@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
 import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
+import QRCode from "qrcode";
 import { useParams } from "react-router-dom";
 import { updateClientSettings } from "../domain/actions";
+import { buildClientInviteLink } from "../lib/clientInvite";
 import { db } from "../lib/db";
 import type { Schema } from "../lib/schema";
 
@@ -28,7 +30,15 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
 
   const [minimumDurationMinutes, setMinimumDurationMinutes] = useState(180);
   const [travelTimeMinutes, setTravelTimeMinutes] = useState(30);
+  const [inviteQr, setInviteQr] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const inviteLink = useMemo(() => {
+    if (!provider || !client) {
+      return null;
+    }
+
+    return buildClientInviteLink(provider, client);
+  }, [client, provider]);
 
   useEffect(() => {
     if (!client) {
@@ -38,6 +48,15 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
     setMinimumDurationMinutes(client.fields.minimumDurationMinutes);
     setTravelTimeMinutes(client.fields.travelTimeMinutes);
   }, [client]);
+
+  useEffect(() => {
+    if (!inviteLink) {
+      setInviteQr(null);
+      return;
+    }
+
+    void QRCode.toDataURL(inviteLink, { margin: 1, width: 240 }).then(setInviteQr);
+  }, [inviteLink]);
 
   if (!session.session?.signedIn) {
     return (
@@ -105,6 +124,16 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
             onChange={(event) => setTravelTimeMinutes(Number(event.target.value))}
           />
         </label>
+        {inviteLink ? (
+          <div className="invite-card">
+            <span className="eyebrow">Invite link</span>
+            <a href={inviteLink}>{inviteLink}</a>
+            <button className="button button--ghost" onClick={() => navigator.clipboard.writeText(inviteLink)} type="button">
+              Copy link
+            </button>
+            {inviteQr ? <img alt="Invite QR code" className="qr-code" src={inviteQr} /> : null}
+          </div>
+        ) : null}
         {status ? <div className="status-banner">{status}</div> : null}
         <div className="row-actions">
           <button
