@@ -1,5 +1,5 @@
 import type { RowHandle } from "@vennbase/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildClientWeekBlocks, createBookingDraftFromBlock, findNextMatchingSlot } from "./availability";
 import type { Schema } from "../lib/schema";
 import { minutesFromTimestamp, toDayKey } from "./date";
@@ -75,7 +75,7 @@ describe("availability engine", () => {
       client: row("clients", "client-1", {
         fullName: "A",
         status: "active",
-        minimumDurationMinutes: 180,
+        minimumDurationMinutes: 30,
         travelTimeMinutes: 30,
       }),
       horizonDays: 1,
@@ -84,6 +84,53 @@ describe("availability engine", () => {
     expect(blocks.some((block) => block.state === "booked-other")).toBe(true);
     expect(blocks.filter((block) => block.state === "available")).toHaveLength(2);
     expect(minutesFromTimestamp(blocks.find((block) => block.state === "available")?.endsAt ?? 0)).toBe(9 * 60 + 30);
+  });
+
+  it("drops leftover availability that cannot fit the client's minimum duration after travel buffering", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-29T12:00:00"));
+    try {
+      const blocks = buildClientWeekBlocks({
+        baseAvailability: [
+          row("baseAvailabilityWindows", "window-1", {
+            weekday: 1,
+            startMinutes: 7 * 60 + 30,
+            endMinutes: 11 * 60 + 30,
+            status: "active",
+            sortKey: 1,
+          }),
+        ],
+        sessions: [],
+        publicBusyWindows: [
+          row("publicBusyWindows", "busy-1", {
+            startsAt: new Date("2026-03-30T09:30:00").getTime(),
+            endsAt: new Date("2026-03-30T13:30:00").getTime(),
+            kind: "personal",
+            originRef: "personal-1",
+            label: "Personal errand",
+          }),
+        ],
+        client: row("clients", "client-1", {
+          fullName: "A",
+          status: "active",
+          minimumDurationMinutes: 180,
+          travelTimeMinutes: 30,
+        }),
+        horizonDays: 2,
+      });
+
+      expect(
+        blocks.some(
+          (block) =>
+            block.dayKey === "2026-03-30" &&
+            block.state === "available" &&
+            minutesFromTimestamp(block.startsAt) === 7 * 60 + 30,
+        ),
+      ).toBe(false);
+      expect(blocks.filter((block) => block.dayKey === "2026-03-30" && block.state === "available")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("matches the next slot by weekday and duration", () => {

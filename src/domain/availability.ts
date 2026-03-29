@@ -41,6 +41,10 @@ interface DayWindow {
   earliestStart?: number;
 }
 
+function canFitDuration(window: DayWindow, durationMinutes: number): boolean {
+  return window.end - window.start >= durationMinutes * 60 * 1000;
+}
+
 function toDayWindowsFromBase(rows: AvailabilityRow[], horizonDays: number): DayWindow[] {
   const today = startOfToday();
   const windows: DayWindow[] = [];
@@ -249,6 +253,8 @@ export function buildClientWeekBlocks(args: {
   busyWindows.forEach((row) => {
     windows = subtractRange(windows, row.fields.startsAt, row.fields.endsAt);
   });
+
+  windows = windows.filter((window) => canFitDuration(window, args.client.fields.minimumDurationMinutes));
 
   const ownSessionIds = new Set(sessions.map((session) => session.id));
   const sessionBlocks = sessions.map((session) => toBookedOwnBlock(session));
