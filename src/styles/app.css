@@ -314,6 +314,10 @@ select {
   background: rgba(36, 32, 26, 0.92);
   color: white;
   border-color: rgba(255, 255, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
 }
 
 .week-block--draft-availability {
@@ -355,8 +359,8 @@ select {
   gap: 0.25rem;
   align-content: start;
   width: 100%;
-  height: 100%;
-  padding: 1.2rem 0.8rem;
+  flex: 1;
+  padding: 0.1rem 0.8rem 1.2rem;
   border: none;
   background: transparent;
   color: inherit;
@@ -366,20 +370,23 @@ select {
 }
 
 .week-block__draft-actions {
-  position: absolute;
-  inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
-  display: grid;
-  gap: 0.45rem;
-  width: min(160px, calc(100% - 1rem));
-  pointer-events: none;
+  display: flex;
+  flex-direction: row;
+  gap: 0.25rem;
+  padding: 1.5rem 0.6rem 0.25rem;
   z-index: 1;
 }
 
 .week-block__draft-save,
 .week-block__draft-delete {
-  width: 100%;
-  pointer-events: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.15rem 0.25rem;
+  opacity: 0.85;
+  line-height: 1;
 }
 
 .range-editor,

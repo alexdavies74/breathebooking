@@ -172,7 +172,7 @@ export function WeekView({
 }: WeekViewProps) {
   const requestRef = useRef(horizonDays);
   const [dragState, setDragState] = useState<DragState | null>(null);
-  const bookingConfirmLabel = bookingEdit?.confirmLabel ?? "Confirm";
+
   const today = startOfToday();
   const dayKeys = Array.from({ length: horizonDays }, (_, index) => toDayKey(today + index * 86400000));
   const hourMarkers = Array.from(
@@ -461,6 +461,11 @@ export function WeekView({
                         }
                         type="button"
                       />
+                      <div className="week-block__draft-actions">
+                        <button className="week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
+                          ✓
+                        </button>
+                      </div>
                       <button
                         aria-label="Move booking"
                         className="week-block__drag-surface"
@@ -482,11 +487,6 @@ export function WeekView({
                           {formatTime(bookingDraft.endsAt)}
                         </small>
                       </button>
-                      <div className="week-block__draft-actions">
-                        <button className="button week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
-                          {bookingConfirmLabel}
-                        </button>
-                      </div>
                       <button
                         aria-label="Resize booking end"
                         className="week-block__drag-handle week-block__drag-handle--bottom week-block__drag-handle--interactive"
@@ -512,8 +512,8 @@ export function WeekView({
                       </small>
                       {bookingDraft ? (
                         <div className="week-block__draft-actions">
-                          <button className="button week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
-                            {bookingConfirmLabel}
+                          <button className="week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
+                            ✓
                           </button>
                         </div>
                       ) : null}
@@ -535,6 +535,20 @@ export function WeekView({
                     }
                     type="button"
                   />
+                  <div className="week-block__draft-actions">
+                    <button className="week-block__draft-save" onClick={() => editConfig.onSaveDraft()} type="button">
+                      ✓
+                    </button>
+                    {!providerDraft.isNew ? (
+                      <button
+                        className="week-block__draft-delete"
+                        onClick={() => editConfig.onDeleteDraft()}
+                        type="button"
+                      >
+                        ✕
+                      </button>
+                    ) : null}
+                  </div>
                   <button
                     aria-label="Move range"
                     className="week-block__drag-surface"
@@ -550,20 +564,6 @@ export function WeekView({
                       {formatTime(providerDraft.dayStart + providerDraft.endMinutes * 60 * 1000)}
                     </small>
                   </button>
-                  <div className="week-block__draft-actions">
-                    <button className="button week-block__draft-save" onClick={() => editConfig.onSaveDraft()} type="button">
-                      Save
-                    </button>
-                    {!providerDraft.isNew ? (
-                      <button
-                        className="button button--ghost week-block__draft-delete"
-                        onClick={() => editConfig.onDeleteDraft()}
-                        type="button"
-                      >
-                        Delete
-                      </button>
-                    ) : null}
-                  </div>
                   <button
                     aria-label="Resize end"
                     className="week-block__drag-handle week-block__drag-handle--bottom week-block__drag-handle--interactive"
