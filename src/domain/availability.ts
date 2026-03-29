@@ -320,18 +320,35 @@ export function toSlotShapeFromSession(session: SessionRow): SlotShape {
   };
 }
 
-export function findNextMatchingSlot(blocks: WeekBlock[], shape: SlotShape): WeekBlock | null {
+function isBookableSlot(block: WeekBlock): boolean {
+  return block.state === "available" || block.state === "maybe";
+}
+
+export function findMatchingSlotAtTime(blocks: WeekBlock[], startsAt: number, durationMinutes: number): WeekBlock | null {
   return (
     blocks.find((block) => {
-      if (block.state !== "available" && block.state !== "maybe") {
+      if (!isBookableSlot(block)) {
         return false;
       }
 
+      const blockStart = block.guaranteedStartAt ?? block.startsAt;
+      return blockStart === startsAt && Math.round((block.endsAt - blockStart) / (60 * 1000)) >= durationMinutes;
+    }) ?? null
+  );
+}
+
+export function findNextMatchingSlot(blocks: WeekBlock[], shape: SlotShape): WeekBlock | null {
+  return (
+    blocks.find((block) => {
+      if (!isBookableSlot(block)) {
+        return false;
+      }
+
+      const blockStart = block.guaranteedStartAt ?? block.startsAt;
       return (
-        weekdayFromTimestamp(block.guaranteedStartAt ?? block.startsAt) === shape.weekday &&
-        minutesFromTimestamp(block.guaranteedStartAt ?? block.startsAt) === shape.startMinutes &&
-        Math.round((block.endsAt - (block.guaranteedStartAt ?? block.startsAt)) / (60 * 1000)) >=
-          shape.durationMinutes
+        weekdayFromTimestamp(blockStart) === shape.weekday &&
+        minutesFromTimestamp(blockStart) === shape.startMinutes &&
+        Math.round((block.endsAt - blockStart) / (60 * 1000)) >= shape.durationMinutes
       );
     }) ?? null
   );

@@ -1,6 +1,6 @@
 import type { RowHandle } from "@vennbase/core";
 import { describe, expect, it, vi } from "vitest";
-import { buildClientWeekBlocks, createBookingDraftFromBlock, findNextMatchingSlot } from "./availability";
+import { buildClientWeekBlocks, createBookingDraftFromBlock, findMatchingSlotAtTime, findNextMatchingSlot } from "./availability";
 import type { Schema } from "../lib/schema";
 import { minutesFromTimestamp, toDayKey } from "./date";
 
@@ -149,6 +149,24 @@ describe("availability engine", () => {
       startMinutes: 9 * 60,
       durationMinutes: 180,
     });
+
+    expect(found?.id).toBe("block-1");
+  });
+
+  it("matches an exact slot one week later by timestamp and duration", () => {
+    const startAt = new Date("2026-04-06T14:00:00").getTime();
+    const block = {
+      id: "block-1",
+      dayKey: "2026-04-06",
+      startsAt: new Date("2026-04-06T13:30:00").getTime(),
+      endsAt: new Date("2026-04-06T18:00:00").getTime(),
+      state: "maybe" as const,
+      interactive: true,
+      guaranteedStartAt: startAt,
+      earliestStartAt: new Date("2026-04-06T13:30:00").getTime(),
+    };
+
+    const found = findMatchingSlotAtTime([block], startAt, 180);
 
     expect(found?.id).toBe("block-1");
   });

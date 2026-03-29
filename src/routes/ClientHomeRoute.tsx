@@ -7,12 +7,12 @@ import { cancelSession, createSessionBooking } from "../domain/actions";
 import {
   buildClientWeekBlocks,
   createBookingDraftFromBlock,
-  createBookingDraftFromPreviousSession,
   dedupePresetShapes,
+  findMatchingSlotAtTime,
   findNextMatchingSlot,
   toSlotShapeFromSession,
 } from "../domain/availability";
-import { formatDayLabel, formatDuration, formatTime, minutesFromTimestamp } from "../domain/date";
+import { addDays, formatDayLabel, formatDuration, formatTime, minutesFromTimestamp } from "../domain/date";
 import { WeekView } from "../components/WeekView";
 import { db } from "../lib/db";
 import { makeRowRef } from "../lib/rowRef";
@@ -90,6 +90,12 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   const latestSession = [...activeSessions].sort(
     (left, right) => right.fields.guaranteedStartAt - left.fields.guaranteedStartAt,
   )[0];
+  const suggestedRebookAt = latestSession ? addDays(latestSession.fields.guaranteedStartAt, 7) : null;
+  const suggestedRebookPrompt = suggestedRebookAt
+    ? `Book ${new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(suggestedRebookAt)} ${formatTime(
+        suggestedRebookAt,
+      )} again on ${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(suggestedRebookAt)}?`
+    : null;
   const quickShapes = dedupePresetShapes(presets.rows).slice(0, 3);
   const selectedSession = selectedSessionId
     ? sessions.rows.find((row) => row.id === selectedSessionId) ?? null
@@ -142,13 +148,13 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   }
 
   async function bookSameSlotNow() {
-    if (!latestSession || !client.data) {
+    if (!latestSession || !client.data || !suggestedRebookAt) {
       return;
     }
 
-    const slot = findNextMatchingSlot(blocks, toSlotShapeFromSession(latestSession));
+    const slot = findMatchingSlotAtTime(blocks, suggestedRebookAt, latestSession.fields.durationMinutes);
     if (!slot) {
-      setFeedback("That exact slot is no longer free. Pick a nearby time below.");
+      setFeedback("That time next week is no longer free. Pick a nearby time below.");
       setSelectedBlockId(null);
       setDraft(null);
       return;
@@ -156,6 +162,26 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
 
     const nextDraft = createBookingDraftFromBlock(slot, client.data.fields.minimumDurationMinutes);
     await bookFromDraft(nextDraft);
+  }
+
+  function draftSuggestedRebooking(sessionRow: NonNullable<typeof selectedSession | typeof latestSession>) {
+    if (!client.data) {
+      return;
+    }
+
+    const nextWeekStartAt = addDays(sessionRow.fields.guaranteedStartAt, 7);
+    const slot = findMatchingSlotAtTime(blocks, nextWeekStartAt, sessionRow.fields.durationMinutes);
+    if (!slot) {
+      setFeedback("That time next week is no longer free. Pick a nearby time below.");
+      setSelectedBlockId(null);
+      setDraft(null);
+      return;
+    }
+
+    setFeedback(null);
+    setSelectedBlockId(slot.id);
+    setSelectedSessionId(null);
+    setDraft(createBookingDraftFromBlock(slot, client.data.fields.minimumDurationMinutes, toSlotShapeFromSession(sessionRow)));
   }
 
   return (
@@ -185,7 +211,7 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
         {latestSession ? (
           <div className="summary-card summary-card--accent">
             <span className="eyebrow">Book again</span>
-            <strong>Book {latestSession.fields.slotLabel} again?</strong>
+            <strong>{suggestedRebookPrompt}</strong>
             <div className="row-actions">
               <button className="button" onClick={() => void bookSameSlotNow()} type="button">
                 Book it
@@ -299,12 +325,11 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
               <button
                 className="button"
                 onClick={() => {
-                  setDraft(createBookingDraftFromPreviousSession(selectedSession));
-                  setSelectedSessionId(null);
+                  draftSuggestedRebooking(selectedSession);
                 }}
                 type="button"
               >
-                Rebook same slot
+                Rebook next week
               </button>
               {provider.data ? (
                 <button

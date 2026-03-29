@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ClientHomeRoute } from "./ClientHomeRoute";
+import { formatDayLabel, formatTime } from "../domain/date";
 
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
@@ -68,6 +69,22 @@ function createAvailabilityRow(id: string, weekday: number, startMinutes: number
       endMinutes: startMinutes + 5 * 60,
       status: "active",
       sortKey: weekday * 1000 + startMinutes,
+    },
+  };
+}
+
+function createSessionRow(id: string, guaranteedStartAt: number) {
+  return {
+    id,
+    ref: { id, collection: "sessions", baseUrl: "http://localhost" },
+    fields: {
+      startsAt: guaranteedStartAt,
+      guaranteedStartAt,
+      earliestStartAt: undefined,
+      durationMinutes: 180,
+      status: "confirmed",
+      bookedByRole: "client",
+      slotLabel: `${formatDayLabel(guaranteedStartAt)} · ${formatTime(guaranteedStartAt)}`,
     },
   };
 }
@@ -142,5 +159,104 @@ describe("ClientHomeRoute", () => {
     await user.click(screen.getByRole("button", { name: "Confirm" }));
 
     expect(mocks.createSessionBooking).toHaveBeenCalledTimes(1);
+  });
+
+  it("suggests rebooking one week later instead of the same date", () => {
+    const latestStartAt = new Date("2026-03-30T14:00:00").getTime();
+    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
+      if (collection === "clients") {
+        return {
+          rows: [createClientRow()],
+        };
+      }
+
+      if (collection === "baseAvailabilityWindows") {
+        return {
+          rows: [1, 2, 3, 4, 5].flatMap((weekday) => [
+            createAvailabilityRow(`window-${weekday}-am`, weekday, 8 * 60),
+            createAvailabilityRow(`window-${weekday}-pm`, weekday, 14 * 60),
+          ]),
+        };
+      }
+
+      if (collection === "sessions") {
+        return {
+          rows: [createSessionRow("session-1", latestStartAt)],
+        };
+      }
+
+      return { rows: [] };
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+        <Routes>
+          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const suggestedStartAt = new Date("2026-04-06T14:00:00").getTime();
+    expect(
+      screen.getByText(
+        `Book ${new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(suggestedStartAt)} ${formatTime(
+          suggestedStartAt,
+        )} again on ${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(suggestedStartAt)}?`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("books the matching slot one week later from the recommendation card", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-29T12:00:00").getTime());
+    try {
+      const user = userEvent.setup();
+      mocks.createSessionBooking.mockResolvedValue({});
+      const latestStartAt = new Date("2026-03-30T14:00:00").getTime();
+
+      mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
+        if (collection === "clients") {
+          return {
+            rows: [createClientRow()],
+          };
+        }
+
+        if (collection === "baseAvailabilityWindows") {
+          return {
+            rows: [1, 2, 3, 4, 5].flatMap((weekday) => [
+              createAvailabilityRow(`window-${weekday}-am`, weekday, 8 * 60),
+              createAvailabilityRow(`window-${weekday}-pm`, weekday, 14 * 60),
+            ]),
+          };
+        }
+
+        if (collection === "sessions") {
+          return {
+            rows: [createSessionRow("session-1", latestStartAt)],
+          };
+        }
+
+        return { rows: [] };
+      });
+
+      render(
+        <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+          <Routes>
+            <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      await user.click(screen.getByRole("button", { name: "Book it" }));
+
+      expect(mocks.createSessionBooking).toHaveBeenCalledWith(
+        expect.objectContaining({
+          draft: expect.objectContaining({
+            guaranteedStartAt: new Date("2026-04-06T14:00:00").getTime(),
+          }),
+        }),
+      );
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 });

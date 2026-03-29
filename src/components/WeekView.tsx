@@ -481,7 +481,7 @@ export function WeekView({
                         </small>
                       </button>
                       <div className="week-block__draft-actions">
-                        <button className="button week-block__draft-save" onClick={() => bookingEdit.onConfirmDraft()} type="button">
+                        <button className="button week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
                           Confirm
                         </button>
                       </div>
