@@ -1,6 +1,12 @@
 import type { RowHandle } from "@vennbase/core";
 import { describe, expect, it, vi } from "vitest";
-import { buildClientWeekBlocks, createBookingDraftFromBlock, findMatchingSlotAtTime, findNextMatchingSlot } from "./availability";
+import {
+  buildClientWeekBlocks,
+  createBookingDraftFromBlock,
+  findMatchingSlotAtTime,
+  findNextMatchingSlot,
+  findSlotContainingTime,
+} from "./availability";
 import type { Schema } from "../lib/schema";
 import { minutesFromTimestamp, toDayKey } from "./date";
 
@@ -133,6 +139,62 @@ describe("availability engine", () => {
     }
   });
 
+  it("reopens the slot for the session being edited", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-29T12:00:00"));
+    try {
+      const sessionStart = new Date("2026-03-30T10:00:00").getTime();
+      const sessionEnd = new Date("2026-03-30T13:00:00").getTime();
+
+      const blocks = buildClientWeekBlocks({
+        baseAvailability: [
+          row("baseAvailabilityWindows", "window-1", {
+            weekday: 1,
+            startMinutes: 9 * 60,
+            endMinutes: 14 * 60,
+            status: "active",
+            sortKey: 1,
+          }),
+        ],
+        sessions: [
+          row("sessions", "session-1", {
+            startsAt: sessionStart,
+            guaranteedStartAt: sessionStart,
+            earliestStartAt: undefined,
+            durationMinutes: 180,
+            status: "confirmed",
+            bookedByRole: "client",
+            slotLabel: "Mon, Mar 30 · 10:00 AM",
+          }),
+        ],
+        publicBusyWindows: [
+          row("publicBusyWindows", "busy-1", {
+            startsAt: sessionStart,
+            endsAt: sessionEnd,
+            kind: "session",
+            originRef: "session-1",
+            label: "Mon, Mar 30 · 10:00 AM",
+          }),
+        ],
+        client: row("clients", "client-1", {
+          fullName: "A",
+          status: "active",
+          minimumDurationMinutes: 180,
+          travelTimeMinutes: 0,
+        }),
+        horizonDays: 2,
+        excludeSessionId: "session-1",
+      });
+
+      const editableSlot = findSlotContainingTime(blocks, sessionStart, 180);
+
+      expect(editableSlot?.state).toBe("available");
+      expect(editableSlot?.dayKey).toBe("2026-03-30");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("matches the next slot by weekday and duration", () => {
     const block = {
       id: "block-1",
@@ -167,6 +229,23 @@ describe("availability engine", () => {
     };
 
     const found = findMatchingSlotAtTime([block], startAt, 180);
+
+    expect(found?.id).toBe("block-1");
+  });
+
+  it("finds the bookable slot containing an existing session time", () => {
+    const startAt = new Date("2026-04-06T10:00:00").getTime();
+    const block = {
+      id: "block-1",
+      dayKey: "2026-04-06",
+      startsAt: new Date("2026-04-06T09:00:00").getTime(),
+      endsAt: new Date("2026-04-06T14:00:00").getTime(),
+      state: "available" as const,
+      interactive: true,
+      guaranteedStartAt: new Date("2026-04-06T09:00:00").getTime(),
+    };
+
+    const found = findSlotContainingTime([block], startAt, 180);
 
     expect(found?.id).toBe("block-1");
   });

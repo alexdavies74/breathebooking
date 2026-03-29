@@ -41,6 +41,7 @@ interface BookingEditConfig {
   bounds?: BookingEditBounds | null;
   onChangeDraft(next: BookingDraft): void;
   onConfirmDraft(): void;
+  confirmLabel?: string;
 }
 
 interface WeekViewProps {
@@ -171,6 +172,7 @@ export function WeekView({
 }: WeekViewProps) {
   const requestRef = useRef(horizonDays);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const bookingConfirmLabel = bookingEdit?.confirmLabel ?? "Confirm";
   const today = startOfToday();
   const dayKeys = Array.from({ length: horizonDays }, (_, index) => toDayKey(today + index * 86400000));
   const hourMarkers = Array.from(
@@ -482,7 +484,7 @@ export function WeekView({
                       </button>
                       <div className="week-block__draft-actions">
                         <button className="button week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
-                          Confirm
+                          {bookingConfirmLabel}
                         </button>
                       </div>
                       <button
@@ -511,7 +513,7 @@ export function WeekView({
                       {bookingDraft ? (
                         <div className="week-block__draft-actions">
                           <button className="button week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
-                            Confirm
+                            {bookingConfirmLabel}
                           </button>
                         </div>
                       ) : null}

@@ -236,20 +236,23 @@ export function buildClientWeekBlocks(args: {
   publicBusyWindows: BusyWindowRow[];
   client: ClientRow;
   horizonDays: number;
+  excludeSessionId?: string;
 }): WeekBlock[] {
   let windows = toDayWindowsFromBase(
     args.baseAvailability.filter((row) => row.fields.status !== "inactive"),
     args.horizonDays,
   );
-  const sessions = activeSessions(args.sessions);
-  const busyWindows = activeBusyWindows(args.publicBusyWindows).map((row) => ({
-    ...row,
-    fields: {
-      ...row.fields,
-      startsAt: row.fields.startsAt - args.client.fields.travelTimeMinutes * 60 * 1000,
-      endsAt: row.fields.endsAt + args.client.fields.travelTimeMinutes * 60 * 1000,
-    },
-  }));
+  const sessions = activeSessions(args.sessions).filter((row) => row.id !== args.excludeSessionId);
+  const busyWindows = activeBusyWindows(args.publicBusyWindows)
+    .filter((row) => row.fields.originRef !== args.excludeSessionId)
+    .map((row) => ({
+      ...row,
+      fields: {
+        ...row.fields,
+        startsAt: row.fields.startsAt - args.client.fields.travelTimeMinutes * 60 * 1000,
+        endsAt: row.fields.endsAt + args.client.fields.travelTimeMinutes * 60 * 1000,
+      },
+    }));
 
   busyWindows.forEach((row) => {
     windows = subtractRange(windows, row.fields.startsAt, row.fields.endsAt);
@@ -322,6 +325,20 @@ export function toSlotShapeFromSession(session: SessionRow): SlotShape {
 
 function isBookableSlot(block: WeekBlock): boolean {
   return block.state === "available" || block.state === "maybe";
+}
+
+export function findSlotContainingTime(blocks: WeekBlock[], startsAt: number, durationMinutes: number): WeekBlock | null {
+  const endsAt = startsAt + durationMinutes * 60 * 1000;
+  return (
+    blocks.find((block) => {
+      if (!isBookableSlot(block)) {
+        return false;
+      }
+
+      const blockStart = block.guaranteedStartAt ?? block.startsAt;
+      return startsAt >= blockStart && endsAt <= block.endsAt;
+    }) ?? null
+  );
 }
 
 export function findMatchingSlotAtTime(blocks: WeekBlock[], startsAt: number, durationMinutes: number): WeekBlock | null {

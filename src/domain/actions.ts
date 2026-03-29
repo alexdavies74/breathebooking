@@ -90,10 +90,7 @@ export async function createSessionBooking(args: {
   draft: BookingDraft;
   bookedByRole: "provider" | "client";
 }) {
-  const sessionLabel = `${formatDayLabel(args.draft.guaranteedStartAt)} · ${formatTime(
-    args.draft.guaranteedStartAt,
-  )}`;
-
+  const sessionLabel = `${formatDayLabel(args.draft.guaranteedStartAt)} · ${formatTime(args.draft.guaranteedStartAt)}`;
   const startsAt = args.draft.guaranteedStartAt;
   const endsAt = args.draft.guaranteedStartAt + args.draft.durationMinutes * 60 * 1000;
 
@@ -125,6 +122,71 @@ export async function createSessionBooking(args: {
       { in: args.provider },
     )
     .committed;
+
+  await db
+    .create(
+      "rebookingPresets",
+      {
+        weekday: weekdayFromTimestamp(args.draft.guaranteedStartAt),
+        startMinutes: minutesFromTimestamp(args.draft.guaranteedStartAt),
+        durationMinutes: args.draft.durationMinutes,
+        label: sessionLabel,
+        lastUsedAt: Date.now(),
+      },
+      { in: args.client },
+    )
+    .committed;
+
+  return session;
+}
+
+export async function updateSessionBooking(args: {
+  provider: ProviderRow;
+  client: ClientRow;
+  session: SessionRow;
+  draft: BookingDraft;
+  bookedByRole: "provider" | "client";
+}) {
+  const sessionLabel = `${formatDayLabel(args.draft.guaranteedStartAt)} · ${formatTime(args.draft.guaranteedStartAt)}`;
+  const startsAt = args.draft.guaranteedStartAt;
+  const endsAt = args.draft.guaranteedStartAt + args.draft.durationMinutes * 60 * 1000;
+
+  const session = await db
+    .update("sessions", args.session, {
+      startsAt,
+      guaranteedStartAt: args.draft.guaranteedStartAt,
+      earliestStartAt: undefined,
+      durationMinutes: args.draft.durationMinutes,
+      status: "confirmed",
+      bookedByRole: args.bookedByRole,
+      slotLabel: sessionLabel,
+    })
+    .committed;
+
+  const busyRow = await findProviderBusyWindow(args.provider, args.session.id, "session");
+  if (busyRow) {
+    await db
+      .update("publicBusyWindows", busyRow, {
+        startsAt,
+        endsAt,
+        label: sessionLabel,
+      })
+      .committed;
+  } else {
+    await db
+      .create(
+        "publicBusyWindows",
+        {
+          startsAt,
+          endsAt,
+          kind: "session",
+          originRef: args.session.id,
+          label: sessionLabel,
+        },
+        { in: args.provider },
+      )
+      .committed;
+  }
 
   await db
     .create(

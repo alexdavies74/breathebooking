@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
   useRow: vi.fn(),
   createSessionBooking: vi.fn(),
+  updateSessionBooking: vi.fn(),
   cancelSession: vi.fn(),
 }));
 
@@ -19,6 +20,7 @@ vi.mock("@vennbase/react", () => ({
 
 vi.mock("../domain/actions", () => ({
   createSessionBooking: (...args: unknown[]) => mocks.createSessionBooking(...args),
+  updateSessionBooking: (...args: unknown[]) => mocks.updateSessionBooking(...args),
   cancelSession: (...args: unknown[]) => mocks.cancelSession(...args),
 }));
 
@@ -31,6 +33,10 @@ function createSession() {
     session: { signedIn: true },
     signIn: vi.fn(),
   };
+}
+
+function escapeForRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function createProviderRow() {
@@ -258,5 +264,118 @@ describe("ClientHomeRoute", () => {
     } finally {
       dateNowSpy.mockRestore();
     }
+  });
+
+  it("updates a selected session from the client planner", async () => {
+    const user = userEvent.setup();
+    mocks.updateSessionBooking.mockResolvedValue({});
+    const sessionStartAt = new Date("2026-03-30T10:00:00").getTime();
+
+    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
+      if (collection === "clients") {
+        return {
+          rows: [createClientRow()],
+        };
+      }
+
+      if (collection === "baseAvailabilityWindows") {
+        return {
+          rows: [createAvailabilityRow("window-1", 1, 8 * 60)],
+        };
+      }
+
+      if (collection === "sessions") {
+        return {
+          rows: [createSessionRow("session-1", sessionStartAt)],
+        };
+      }
+
+      if (collection === "publicBusyWindows") {
+        return {
+          rows: [
+            {
+              id: "busy-1",
+              ref: { id: "busy-1", collection: "publicBusyWindows", baseUrl: "http://localhost" },
+              fields: {
+                startsAt: sessionStartAt,
+                endsAt: sessionStartAt + 180 * 60 * 1000,
+                kind: "session",
+                originRef: "session-1",
+                label: `${formatDayLabel(sessionStartAt)} · ${formatTime(sessionStartAt)}`,
+              },
+            },
+          ],
+        };
+      }
+
+      return { rows: [] };
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+        <Routes>
+          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sessionLabel = `${formatDayLabel(sessionStartAt)} · ${formatTime(sessionStartAt)}`;
+    await user.click(screen.getByRole("button", { name: new RegExp(escapeForRegExp(sessionLabel)) }));
+    await user.click(screen.getByRole("button", { name: "Update" }));
+
+    expect(mocks.updateSessionBooking).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ id: "session-1" }),
+        draft: expect.objectContaining({
+          guaranteedStartAt: sessionStartAt,
+          durationMinutes: 180,
+        }),
+      }),
+    );
+  });
+
+  it("cancels a selected session from edit mode", async () => {
+    const user = userEvent.setup();
+    mocks.cancelSession.mockResolvedValue({});
+    const sessionStartAt = new Date("2026-03-30T10:00:00").getTime();
+
+    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
+      if (collection === "clients") {
+        return {
+          rows: [createClientRow()],
+        };
+      }
+
+      if (collection === "baseAvailabilityWindows") {
+        return {
+          rows: [createAvailabilityRow("window-1", 1, 8 * 60)],
+        };
+      }
+
+      if (collection === "sessions") {
+        return {
+          rows: [createSessionRow("session-1", sessionStartAt)],
+        };
+      }
+
+      return { rows: [] };
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+        <Routes>
+          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sessionLabel = `${formatDayLabel(sessionStartAt)} · ${formatTime(sessionStartAt)}`;
+    await user.click(screen.getByRole("button", { name: new RegExp(escapeForRegExp(sessionLabel)) }));
+    await user.click(screen.getByRole("button", { name: "Cancel session" }));
+
+    expect(mocks.cancelSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "provider-1" }),
+      expect.objectContaining({ id: "session-1" }),
+    );
   });
 });
