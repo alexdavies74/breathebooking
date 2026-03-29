@@ -18,7 +18,11 @@ export function InviteRoute({ session }: InviteRouteProps) {
   const accept = useAcceptInviteFromUrl(db, {
     enabled: Boolean(session.session?.signedIn && clientId),
     onOpen: async (provider) => {
-      navigate(`/client/${clientId}?providerId=${provider.id}`);
+      const nextParams = new URLSearchParams({
+        providerId: provider.id,
+        providerBaseUrl: provider.ref.baseUrl,
+      });
+      navigate(`/client/${clientId}?${nextParams.toString()}`);
     },
   });
 

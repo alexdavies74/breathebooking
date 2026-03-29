@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useSearchParams, useParams } from "react-router-dom";
 import type { RowRef } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
-import { useParents, useQuery, useRow } from "@vennbase/react";
+import { useQuery, useRow } from "@vennbase/react";
 import { cancelSession, createSessionBooking } from "../domain/actions";
 import {
   buildClientWeekBlocks,
@@ -27,19 +27,27 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   const { clientId } = useParams();
   const [searchParams] = useSearchParams();
   const providerIdFromUrl = searchParams.get("providerId");
+  const providerBaseUrlFromUrl = searchParams.get("providerBaseUrl");
   const [horizonDays, setHorizonDays] = useState(14);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [draft, setDraft] = useState<ReturnType<typeof createBookingDraftFromBlock> | null>(null);
 
-  const clientRef = clientId ? makeRowRef("clients", clientId) : null;
-  const client = useRow<Schema, "clients">(db, clientRef);
-  const clientParents = useParents(db, client.data);
   const providerRef: RowRef<"providers"> | undefined = providerIdFromUrl
-    ? makeRowRef("providers", providerIdFromUrl)
-    : clientParents.data?.find((row): row is RowRef<"providers"> => row.collection === "providers");
+    ? providerBaseUrlFromUrl
+      ? makeRowRef("providers", providerIdFromUrl, providerBaseUrlFromUrl)
+      : undefined
+    : undefined;
   const provider = useRow<Schema, "providers">(db, providerRef);
+  const providerClients = useQuery(
+    db,
+    "clients",
+    provider.data ? { in: provider.data.ref, index: "byName", order: "asc" } : null,
+  );
+  const client = {
+    data: clientId ? providerClients.rows.find((row) => row.id === clientId) ?? null : null,
+  };
 
   const baseAvailability = useQuery(
     db,
