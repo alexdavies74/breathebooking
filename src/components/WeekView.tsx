@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   clamp,
   formatDayLabel,
   formatTime,
+  minutesFromTimestamp,
   roundToStep,
   startOfToday,
+  timestampFromDayAndMinutes,
   toDayKey,
 } from "../domain/date";
 import type {
@@ -26,6 +28,21 @@ interface ProviderEditConfig {
   onDeleteDraft(): void;
 }
 
+interface BookingEditBounds {
+  dayKey: string;
+  dayStart: number;
+  minStartMinutes: number;
+  maxEndMinutes: number;
+  minDurationMinutes: number;
+}
+
+interface BookingEditConfig {
+  draft?: BookingDraft | null;
+  bounds?: BookingEditBounds | null;
+  onChangeDraft(next: BookingDraft): void;
+  onConfirmDraft(): void;
+}
+
 interface WeekViewProps {
   role: Role;
   blocks: WeekBlock[];
@@ -35,6 +52,7 @@ interface WeekViewProps {
   horizonDays?: number;
   onExtendHorizon?: (nextHorizonDays: number) => void;
   providerEdit?: ProviderEditConfig;
+  bookingEdit?: BookingEditConfig;
 }
 
 const DAY_START_MINUTES = 6 * 60;
@@ -45,8 +63,10 @@ const RANGE_STEP = 30;
 const MIN_RANGE_MINUTES = 30;
 
 type DragMode = "move" | "resize-start" | "resize-end";
+type DragTarget = "provider" | "booking";
 
 interface DragState {
+  target: DragTarget;
   mode: DragMode;
   canvasTop: number;
   canvasHeight: number;
@@ -120,6 +140,24 @@ function positionToMinutes(clientY: number, canvasTop: number, canvasHeight: num
   return clamp(roundToStep(rawMinutes, RANGE_STEP), DAY_START_MINUTES, DAY_END_MINUTES);
 }
 
+function toBookingDraft(
+  draft: BookingDraft,
+  bounds: BookingEditBounds,
+  startMinutes: number,
+  endMinutes: number,
+): BookingDraft {
+  const guaranteedStartAt = timestampFromDayAndMinutes(bounds.dayStart, startMinutes);
+  return {
+    ...draft,
+    startsAt: guaranteedStartAt,
+    guaranteedStartAt,
+    earliestStartAt: undefined,
+    endsAt: timestampFromDayAndMinutes(bounds.dayStart, endMinutes),
+    durationMinutes: endMinutes - startMinutes,
+    dayKey: bounds.dayKey,
+  };
+}
+
 export function WeekView({
   role,
   blocks,
@@ -129,6 +167,7 @@ export function WeekView({
   horizonDays = 7,
   onExtendHorizon,
   providerEdit,
+  bookingEdit,
 }: WeekViewProps) {
   const requestRef = useRef(horizonDays);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -150,69 +189,111 @@ export function WeekView({
   }, [horizonDays]);
 
   useEffect(() => {
-    if (!dragState || !providerEdit || !providerEdit.draft) {
+    if (!dragState) {
       return;
     }
 
     const currentDrag = dragState;
-    const editConfig = providerEdit;
-    const currentDraft = editConfig.draft!;
 
-    function handleMouseMove(event: MouseEvent) {
+    function handlePointerMove(event: PointerEvent) {
       const pointerMinutes = positionToMinutes(event.clientY, currentDrag.canvasTop, currentDrag.canvasHeight);
       const duration = currentDrag.initialEndMinutes - currentDrag.initialStartMinutes;
+
+      if (currentDrag.target === "provider") {
+        if (!providerEdit?.draft) {
+          return;
+        }
+
+        const currentDraft = providerEdit.draft;
+
+        if (currentDrag.mode === "move") {
+          const unclampedStart = pointerMinutes - currentDrag.pointerOffsetMinutes;
+          const nextStart = clamp(
+            roundToStep(unclampedStart, RANGE_STEP),
+            DAY_START_MINUTES,
+            DAY_END_MINUTES - duration,
+          );
+          providerEdit.onChangeDraft({
+            ...currentDraft,
+            startMinutes: nextStart,
+            endMinutes: nextStart + duration,
+          });
+          return;
+        }
+
+        if (currentDrag.mode === "resize-start") {
+          const nextStart = clamp(
+            pointerMinutes,
+            DAY_START_MINUTES,
+            currentDrag.initialEndMinutes - MIN_RANGE_MINUTES,
+          );
+          providerEdit.onChangeDraft({
+            ...currentDraft,
+            startMinutes: nextStart,
+          });
+          return;
+        }
+
+        const nextEnd = clamp(
+          pointerMinutes,
+          currentDrag.initialStartMinutes + MIN_RANGE_MINUTES,
+          DAY_END_MINUTES,
+        );
+        providerEdit.onChangeDraft({
+          ...currentDraft,
+          endMinutes: nextEnd,
+        });
+        return;
+      }
+
+      if (!bookingEdit?.draft || !bookingEdit.bounds) {
+        return;
+      }
+
+      const currentDraft = bookingEdit.draft;
+      const bounds = bookingEdit.bounds;
 
       if (currentDrag.mode === "move") {
         const unclampedStart = pointerMinutes - currentDrag.pointerOffsetMinutes;
         const nextStart = clamp(
           roundToStep(unclampedStart, RANGE_STEP),
-          DAY_START_MINUTES,
-          DAY_END_MINUTES - duration,
+          bounds.minStartMinutes,
+          bounds.maxEndMinutes - duration,
         );
-        editConfig.onChangeDraft({
-          ...currentDraft,
-          startMinutes: nextStart,
-          endMinutes: nextStart + duration,
-        });
+        bookingEdit.onChangeDraft(toBookingDraft(currentDraft, bounds, nextStart, nextStart + duration));
         return;
       }
 
       if (currentDrag.mode === "resize-start") {
         const nextStart = clamp(
           pointerMinutes,
-          DAY_START_MINUTES,
-          currentDrag.initialEndMinutes - MIN_RANGE_MINUTES,
+          bounds.minStartMinutes,
+          currentDrag.initialEndMinutes - bounds.minDurationMinutes,
         );
-        editConfig.onChangeDraft({
-          ...currentDraft,
-          startMinutes: nextStart,
-        });
+        bookingEdit.onChangeDraft(toBookingDraft(currentDraft, bounds, nextStart, currentDrag.initialEndMinutes));
         return;
       }
 
       const nextEnd = clamp(
         pointerMinutes,
-        currentDrag.initialStartMinutes + MIN_RANGE_MINUTES,
-        DAY_END_MINUTES,
+        currentDrag.initialStartMinutes + bounds.minDurationMinutes,
+        bounds.maxEndMinutes,
       );
-      editConfig.onChangeDraft({
-        ...currentDraft,
-        endMinutes: nextEnd,
-      });
+      bookingEdit.onChangeDraft(toBookingDraft(currentDraft, bounds, currentDrag.initialStartMinutes, nextEnd));
     }
 
-    function handleMouseUp() {
+    function handlePointerUp() {
       setDragState(null);
     }
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
 
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [dragState, providerEdit]);
+  }, [bookingEdit, dragState, providerEdit]);
 
   function maybeExtendHorizon(container: HTMLDivElement) {
     if (!onExtendHorizon) {
@@ -234,9 +315,11 @@ export function WeekView({
   }
 
   function startDraftDrag(
-    event: ReactMouseEvent<HTMLDivElement | HTMLButtonElement>,
+    event: ReactPointerEvent<HTMLDivElement | HTMLButtonElement>,
+    target: DragTarget,
     mode: DragMode,
-    draft: ProviderRangeDraft,
+    startMinutes: number,
+    endMinutes: number,
   ) {
     event.preventDefault();
     event.stopPropagation();
@@ -248,13 +331,14 @@ export function WeekView({
     const rect = canvas.getBoundingClientRect();
     const pointerMinutes = positionToMinutes(event.clientY, rect.top, rect.height);
     setDragState({
+      target,
       mode,
       canvasTop: rect.top,
       canvasHeight: rect.height,
-      initialStartMinutes: draft.startMinutes,
-      initialEndMinutes: draft.endMinutes,
+      initialStartMinutes: startMinutes,
+      initialEndMinutes: endMinutes,
       pointerOffsetMinutes:
-        mode === "move" ? pointerMinutes - draft.startMinutes : 0,
+        mode === "move" ? pointerMinutes - startMinutes : 0,
     });
   }
 
@@ -280,7 +364,9 @@ export function WeekView({
       {dayKeys.map((dayKey, index) => {
         const dayStart = today + index * 86400000;
         const dayBlocks = (grouped.get(dayKey) ?? []).sort((left, right) => left.startsAt - right.startsAt);
-        const draftForDay = selectedDraft?.dayKey === dayKey ? selectedDraft : null;
+        const bookingDraft = bookingEdit?.draft?.dayKey === dayKey ? bookingEdit.draft : null;
+        const draftForDay = bookingDraft ?? (selectedDraft?.dayKey === dayKey ? selectedDraft : null);
+        const bookingBounds = bookingEdit?.bounds?.dayKey === dayKey ? bookingEdit.bounds : null;
         const editConfig = providerEdit;
         const providerDraft = editConfig?.draft?.dayKey === dayKey ? editConfig.draft : null;
 
@@ -357,12 +443,80 @@ export function WeekView({
 
               {draftForDay ? (
                 <div className="week-block week-block--draft" style={blockPosition(draftForDay)}>
-                  <span>Draft booking</span>
-                  <small>
-                    {formatTime(draftForDay.earliestStartAt ?? draftForDay.guaranteedStartAt)}
-                    {" - "}
-                    {formatTime(draftForDay.endsAt)}
-                  </small>
+                  {bookingDraft && bookingBounds ? (
+                    <>
+                      <button
+                        aria-label="Resize booking start"
+                        className="week-block__drag-handle week-block__drag-handle--top week-block__drag-handle--interactive"
+                        onPointerDown={(event) =>
+                          startDraftDrag(
+                            event,
+                            "booking",
+                            "resize-start",
+                            minutesFromTimestamp(bookingDraft.guaranteedStartAt),
+                            minutesFromTimestamp(bookingDraft.endsAt),
+                          )
+                        }
+                        type="button"
+                      />
+                      <button
+                        aria-label="Move booking"
+                        className="week-block__drag-surface"
+                        onPointerDown={(event) =>
+                          startDraftDrag(
+                            event,
+                            "booking",
+                            "move",
+                            minutesFromTimestamp(bookingDraft.guaranteedStartAt),
+                            minutesFromTimestamp(bookingDraft.endsAt),
+                          )
+                        }
+                        type="button"
+                      >
+                        <span>Draft booking</span>
+                        <small>
+                          {formatTime(bookingDraft.earliestStartAt ?? bookingDraft.guaranteedStartAt)}
+                          {" - "}
+                          {formatTime(bookingDraft.endsAt)}
+                        </small>
+                      </button>
+                      <div className="week-block__draft-actions">
+                        <button className="button week-block__draft-save" onClick={() => bookingEdit.onConfirmDraft()} type="button">
+                          Confirm
+                        </button>
+                      </div>
+                      <button
+                        aria-label="Resize booking end"
+                        className="week-block__drag-handle week-block__drag-handle--bottom week-block__drag-handle--interactive"
+                        onPointerDown={(event) =>
+                          startDraftDrag(
+                            event,
+                            "booking",
+                            "resize-end",
+                            minutesFromTimestamp(bookingDraft.guaranteedStartAt),
+                            minutesFromTimestamp(bookingDraft.endsAt),
+                          )
+                        }
+                        type="button"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <span>Draft booking</span>
+                      <small>
+                        {formatTime(draftForDay.earliestStartAt ?? draftForDay.guaranteedStartAt)}
+                        {" - "}
+                        {formatTime(draftForDay.endsAt)}
+                      </small>
+                      {bookingDraft ? (
+                        <div className="week-block__draft-actions">
+                          <button className="button week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
+                            Confirm
+                          </button>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               ) : null}
 
@@ -374,13 +528,17 @@ export function WeekView({
                   <button
                     aria-label="Resize start"
                     className="week-block__drag-handle week-block__drag-handle--top week-block__drag-handle--interactive"
-                    onMouseDown={(event) => startDraftDrag(event, "resize-start", providerDraft)}
+                    onPointerDown={(event) =>
+                      startDraftDrag(event, "provider", "resize-start", providerDraft.startMinutes, providerDraft.endMinutes)
+                    }
                     type="button"
                   />
                   <button
                     aria-label="Move range"
                     className="week-block__drag-surface"
-                    onMouseDown={(event) => startDraftDrag(event, "move", providerDraft)}
+                    onPointerDown={(event) =>
+                      startDraftDrag(event, "provider", "move", providerDraft.startMinutes, providerDraft.endMinutes)
+                    }
                     type="button"
                   >
                     <span>{labelForProviderKind(providerDraft.sourceKind, providerDraft.isNew)}</span>
@@ -407,7 +565,9 @@ export function WeekView({
                   <button
                     aria-label="Resize end"
                     className="week-block__drag-handle week-block__drag-handle--bottom week-block__drag-handle--interactive"
-                    onMouseDown={(event) => startDraftDrag(event, "resize-end", providerDraft)}
+                    onPointerDown={(event) =>
+                      startDraftDrag(event, "provider", "resize-end", providerDraft.startMinutes, providerDraft.endMinutes)
+                    }
                     type="button"
                   />
                 </div>

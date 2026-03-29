@@ -347,6 +347,7 @@ select {
   border: none;
   pointer-events: auto;
   cursor: ns-resize;
+  touch-action: none;
 }
 
 .week-block__drag-surface {
@@ -361,6 +362,7 @@ select {
   color: inherit;
   text-align: left;
   cursor: grab;
+  touch-action: none;
 }
 
 .week-block__draft-actions {
@@ -370,11 +372,14 @@ select {
   display: grid;
   gap: 0.45rem;
   width: min(160px, calc(100% - 1rem));
+  pointer-events: none;
+  z-index: 1;
 }
 
 .week-block__draft-save,
 .week-block__draft-delete {
   width: 100%;
+  pointer-events: auto;
 }
 
 .range-editor,

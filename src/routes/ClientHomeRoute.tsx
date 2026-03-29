@@ -12,8 +12,7 @@ import {
   findNextMatchingSlot,
   toSlotShapeFromSession,
 } from "../domain/availability";
-import { formatDayLabel, formatDuration, formatTime, minutesFromTimestamp, toDayKey } from "../domain/date";
-import { RangeEditor } from "../components/RangeEditor";
+import { formatDayLabel, formatDuration, formatTime, minutesFromTimestamp } from "../domain/date";
 import { WeekView } from "../components/WeekView";
 import { db } from "../lib/db";
 import { makeRowRef } from "../lib/rowRef";
@@ -96,6 +95,20 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     ? sessions.rows.find((row) => row.id === selectedSessionId) ?? null
     : null;
   const selectedBlock = selectedBlockId ? blocks.find((block) => block.id === selectedBlockId) ?? null : null;
+  const bookingBounds = useMemo(() => {
+    if (!selectedBlock) {
+      return null;
+    }
+
+    const dayStart = new Date(`${selectedBlock.dayKey}T00:00:00`).getTime();
+    return {
+      dayKey: selectedBlock.dayKey,
+      dayStart,
+      minStartMinutes: minutesFromTimestamp(selectedBlock.guaranteedStartAt ?? selectedBlock.startsAt),
+      maxEndMinutes: minutesFromTimestamp(selectedBlock.endsAt),
+      minDurationMinutes: client.data?.fields.minimumDurationMinutes ?? 30,
+    };
+  }, [client.data?.fields.minimumDurationMinutes, selectedBlock]);
 
   const signInGate = !session.session?.signedIn ? (
     <div className="panel">
@@ -214,6 +227,18 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
           role="client"
           blocks={blocks}
           selectedDraft={draft}
+          bookingEdit={
+            draft
+              ? {
+                  draft,
+                  bounds: bookingBounds,
+                  onChangeDraft: setDraft,
+                  onConfirmDraft: () => {
+                    void bookFromDraft(draft);
+                  },
+                }
+              : undefined
+          }
           horizonDays={horizonDays}
           onExtendHorizon={setHorizonDays}
           onSelectBlock={(block) => {
@@ -223,6 +248,7 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
 
             const previousShape = latestSession ? toSlotShapeFromSession(latestSession) : quickShapes[0];
             setSelectedBlockId(block.id);
+            setSelectedSessionId(null);
             setDraft(createBookingDraftFromBlock(block, client.data.fields.minimumDurationMinutes, previousShape));
           }}
           onSelectSession={(block) => {
@@ -234,42 +260,27 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
       </section>
 
       <aside className="panel">
-        {selectedBlock && draft && client.data ? (
+        {draft ? (
           <>
             <p className="eyebrow">Booking draft</p>
-            <h2>{selectedBlock.state === "maybe" ? "Flexible arrival slot" : "Confirm booking"}</h2>
+            <h2>{selectedBlock?.state === "maybe" ? "Flexible arrival slot" : "Confirm booking"}</h2>
             <p>
-              {selectedBlock.state === "maybe"
-                ? `From ${formatTime(selectedBlock.startsAt)} if traffic is light. Guaranteed from ${formatTime(selectedBlock.guaranteedStartAt ?? selectedBlock.startsAt)}.`
-                : "Adjust your visit within the available window."}
+              {selectedBlock
+                ? selectedBlock.state === "maybe"
+                  ? `Drag the booking directly on the planner. Arrival can start from ${formatTime(selectedBlock.startsAt)} if traffic is light, with a guaranteed start from ${formatTime(selectedBlock.guaranteedStartAt ?? selectedBlock.startsAt)}.`
+                  : "Drag the booking directly on the planner to adjust start time and length within this open window."
+                : "Use the draft on the planner to confirm this booking. Pick an open slot first if you want to drag it."}
             </p>
-            <RangeEditor
-              minMinutes={minutesFromTimestamp(selectedBlock.guaranteedStartAt ?? selectedBlock.startsAt)}
-              maxMinutes={minutesFromTimestamp(selectedBlock.endsAt)}
-              step={30}
-              minDurationMinutes={client.data.fields.minimumDurationMinutes}
-              startMinutes={minutesFromTimestamp(draft.guaranteedStartAt)}
-              endMinutes={minutesFromTimestamp(draft.endsAt)}
-              earliestStartMinutes={
-                draft.earliestStartAt === undefined ? undefined : minutesFromTimestamp(draft.earliestStartAt)
-              }
-              allowEarlyStart={false}
-              onChange={(next) => {
-                const dayStart = new Date(`${selectedBlock.dayKey}T00:00:00`).getTime();
-                setDraft({
-                  ...draft,
-                  guaranteedStartAt: dayStart + next.startMinutes * 60 * 1000,
-                  earliestStartAt: undefined,
-                  startsAt: dayStart + next.startMinutes * 60 * 1000,
-                  endsAt: dayStart + next.endMinutes * 60 * 1000,
-                  durationMinutes: next.endMinutes - next.startMinutes,
-                  dayKey: toDayKey(dayStart),
-                });
-              }}
-            />
-            <button className="button" onClick={() => void bookFromDraft(draft)} type="button">
-              Confirm booking
-            </button>
+            <div className="summary-card">
+              <span className="eyebrow">Selected time</span>
+              <strong>{formatDayLabel(draft.guaranteedStartAt)}</strong>
+              <p>
+                {formatTime(draft.earliestStartAt ?? draft.guaranteedStartAt)}
+                {" - "}
+                {formatTime(draft.endsAt)}
+              </p>
+              <p>Duration: {formatDuration(draft.durationMinutes)}</p>
+            </div>
           </>
         ) : null}
 

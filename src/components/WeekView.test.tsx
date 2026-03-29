@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { WeekView } from "./WeekView";
 import { toDayKey } from "../domain/date";
-import type { ProviderRangeDraft, WeekBlock } from "../domain/types";
+import type { BookingDraft, ProviderRangeDraft, WeekBlock } from "../domain/types";
 
 function setCanvasRect(container: HTMLElement) {
   const canvas = container.querySelector(".day-column__canvas") as HTMLDivElement;
@@ -51,6 +51,17 @@ function buildDraft(dayKey: string): ProviderRangeDraft {
     startMinutes: 9 * 60,
     endMinutes: 13 * 60,
     isNew: false,
+  };
+}
+
+function buildBookingDraft(dayKey: string): BookingDraft {
+  return {
+    startsAt: new Date(`${dayKey}T09:00:00`).getTime(),
+    guaranteedStartAt: new Date(`${dayKey}T09:00:00`).getTime(),
+    endsAt: new Date(`${dayKey}T12:00:00`).getTime(),
+    durationMinutes: 180,
+    dayKey,
+    sourceBlockId: "available-1",
   };
 }
 
@@ -201,20 +212,67 @@ describe("WeekView", () => {
 
     setCanvasRect(container);
 
-    fireEvent.mouseDown(screen.getByRole("button", { name: "Move range" }), { clientY: 405 });
-    fireEvent.mouseMove(window, { clientY: 450 });
-    fireEvent.mouseUp(window);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Move range" }), { clientY: 405 });
+    fireEvent.pointerMove(window, { clientY: 450 });
+    fireEvent.pointerUp(window);
 
-    fireEvent.mouseDown(screen.getByRole("button", { name: "Resize start" }), { clientY: 405 });
-    fireEvent.mouseMove(window, { clientY: 360 });
-    fireEvent.mouseUp(window);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Resize start" }), { clientY: 405 });
+    fireEvent.pointerMove(window, { clientY: 360 });
+    fireEvent.pointerUp(window);
 
-    fireEvent.mouseDown(screen.getByRole("button", { name: "Resize end" }), { clientY: 585 });
-    fireEvent.mouseMove(window, { clientY: 630 });
-    fireEvent.mouseUp(window);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Resize end" }), { clientY: 585 });
+    fireEvent.pointerMove(window, { clientY: 630 });
+    fireEvent.pointerUp(window);
 
     expect(onChangeDraft).toHaveBeenCalled();
     expect(onChangeDraft.mock.calls.some(([draft]) => draft.startMinutes !== 9 * 60)).toBe(true);
     expect(onChangeDraft.mock.calls.some(([draft]) => draft.endMinutes !== 13 * 60)).toBe(true);
+  });
+
+  it("updates client booking drafts in the planner and confirms inline", async () => {
+    const user = userEvent.setup();
+    const dayKey = toDayKey(Date.now());
+    const onChangeDraft = vi.fn();
+    const onConfirmDraft = vi.fn();
+
+    const { container } = render(
+      <WeekView
+        role="client"
+        blocks={[buildEditableBlock(dayKey)]}
+        selectedDraft={buildBookingDraft(dayKey)}
+        horizonDays={1}
+        bookingEdit={{
+          draft: buildBookingDraft(dayKey),
+          bounds: {
+            dayKey,
+            dayStart: new Date(`${dayKey}T00:00:00`).getTime(),
+            minStartMinutes: 9 * 60,
+            maxEndMinutes: 13 * 60,
+            minDurationMinutes: 60,
+          },
+          onChangeDraft,
+          onConfirmDraft,
+        }}
+      />,
+    );
+
+    setCanvasRect(container);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Move booking" }), { clientY: 180 });
+    fireEvent.pointerMove(window, { clientY: 225 });
+    fireEvent.pointerUp(window);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Resize booking end" }), { clientY: 270 });
+    fireEvent.pointerMove(window, { clientY: 315 });
+    fireEvent.pointerUp(window);
+
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
+
+    expect(onChangeDraft).toHaveBeenCalled();
+    expect(onChangeDraft.mock.calls.some(([draft]) => draft.guaranteedStartAt !== buildBookingDraft(dayKey).guaranteedStartAt)).toBe(
+      true,
+    );
+    expect(onChangeDraft.mock.calls.some(([draft]) => draft.endsAt !== buildBookingDraft(dayKey).endsAt)).toBe(true);
+    expect(onConfirmDraft).toHaveBeenCalled();
   });
 });

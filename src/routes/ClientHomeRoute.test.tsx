@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ClientHomeRoute } from "./ClientHomeRoute";
@@ -119,5 +120,27 @@ describe("ClientHomeRoute", () => {
 
     expect(screen.getAllByText("Mon, Mar 30 open")).toHaveLength(2);
     expect(screen.getAllByText(/open$/).length).toBeGreaterThan(0);
+  });
+
+  it("confirms bookings from the planner instead of showing duplicate range sliders", async () => {
+    const user = userEvent.setup();
+    mocks.createSessionBooking.mockResolvedValue({});
+
+    render(
+      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+        <Routes>
+          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getAllByText("Mon, Mar 30 open")[0]);
+
+    expect(screen.queryByLabelText("Start")).toBeNull();
+    expect(screen.queryByLabelText("End")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
+
+    expect(mocks.createSessionBooking).toHaveBeenCalledTimes(1);
   });
 });

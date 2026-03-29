@@ -2,6 +2,7 @@ import type { RowHandle } from "@vennbase/core";
 import type { Schema } from "../lib/schema";
 import {
   addDays,
+  clamp,
   formatDayLabel,
   formatTime,
   minutesFromTimestamp,
@@ -273,14 +274,19 @@ export function createBookingDraftFromBlock(
   previousShape?: SlotShape,
 ): BookingDraft {
   const dayStart = new Date(`${block.dayKey}T00:00:00`).getTime();
+  const minStartAt = block.guaranteedStartAt ?? block.startsAt;
+  const maxDurationMinutes = Math.round((block.endsAt - minStartAt) / (60 * 1000));
   const preferredStart = previousShape
     ? timestampFromDayAndMinutes(dayStart, previousShape.startMinutes)
     : undefined;
   const baseStart = previousShape
-    ? Math.max(block.guaranteedStartAt ?? block.startsAt, preferredStart ?? block.startsAt)
-    : block.guaranteedStartAt ?? block.startsAt;
-  const durationMinutes = previousShape?.durationMinutes ?? minimumDurationMinutes;
-  const guaranteedStartAt = block.guaranteedStartAt ?? baseStart;
+    ? Math.max(minStartAt, preferredStart ?? block.startsAt)
+    : minStartAt;
+  const durationMinutes = Math.max(
+    minimumDurationMinutes,
+    Math.min(previousShape?.durationMinutes ?? minimumDurationMinutes, maxDurationMinutes),
+  );
+  const guaranteedStartAt = clamp(baseStart, minStartAt, block.endsAt - durationMinutes * 60 * 1000);
 
   return {
     startsAt: guaranteedStartAt,
