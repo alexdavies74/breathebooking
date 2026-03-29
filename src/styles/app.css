@@ -241,6 +241,10 @@ select {
   overflow: hidden;
 }
 
+.day-column__canvas--editable {
+  cursor: crosshair;
+}
+
 .day-column__hour-line {
   position: absolute;
   left: 0;
@@ -260,10 +264,15 @@ select {
   border-radius: 18px;
   border: 1px solid transparent;
   color: var(--ink);
+  overflow: hidden;
 }
 
 .week-block small {
   opacity: 0.74;
+}
+
+.week-block--editable {
+  cursor: pointer;
 }
 
 .week-block--available {
@@ -305,6 +314,67 @@ select {
   background: rgba(36, 32, 26, 0.92);
   color: white;
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+.week-block--draft-availability {
+  background: rgba(197, 92, 51, 0.94);
+}
+
+.week-block--draft-personal-block {
+  background: rgba(73, 96, 123, 0.94);
+}
+
+.week-block__drag-handle {
+  position: absolute;
+  left: 50%;
+  width: 44px;
+  height: 8px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  pointer-events: none;
+}
+
+.week-block__drag-handle--top {
+  top: 0.45rem;
+}
+
+.week-block__drag-handle--bottom {
+  bottom: 0.45rem;
+}
+
+.week-block__drag-handle--interactive {
+  border: none;
+  pointer-events: auto;
+  cursor: ns-resize;
+}
+
+.week-block__drag-surface {
+  display: grid;
+  gap: 0.25rem;
+  align-content: start;
+  width: 100%;
+  height: 100%;
+  padding: 1.2rem 0.8rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: grab;
+}
+
+.week-block__draft-actions {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 0.45rem;
+  width: min(160px, calc(100% - 1rem));
+}
+
+.week-block__draft-save,
+.week-block__draft-delete {
+  width: 100%;
 }
 
 .range-editor,

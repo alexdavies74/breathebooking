@@ -1,0 +1,134 @@
+import { useEffect, useState } from "react";
+import type { RowHandle } from "@vennbase/core";
+import type { UseSessionResult } from "@vennbase/react";
+import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
+import { useParams } from "react-router-dom";
+import { updateClientSettings } from "../domain/actions";
+import { db } from "../lib/db";
+import type { Schema } from "../lib/schema";
+
+interface ProviderClientSettingsRouteProps {
+  session: UseSessionResult;
+}
+
+export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsRouteProps) {
+  const { clientId } = useParams();
+  const currentUser = useCurrentUser(db, { enabled: Boolean(session.session?.signedIn) });
+  const savedProvider = useSavedRow<Schema, RowHandle<Schema, "providers">>(db, {
+    key: "active-provider",
+    enabled: Boolean(session.session?.signedIn),
+  });
+  const provider = savedProvider.data ?? null;
+  const providerClients = useQuery(
+    db,
+    "clients",
+    provider ? { in: provider.ref, index: "byName", order: "asc" } : null,
+  );
+  const client = clientId ? providerClients.rows.find((row) => row.id === clientId) ?? null : null;
+
+  const [minimumDurationMinutes, setMinimumDurationMinutes] = useState(180);
+  const [travelTimeMinutes, setTravelTimeMinutes] = useState(30);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!client) {
+      return;
+    }
+
+    setMinimumDurationMinutes(client.fields.minimumDurationMinutes);
+    setTravelTimeMinutes(client.fields.travelTimeMinutes);
+  }, [client]);
+
+  if (!session.session?.signedIn) {
+    return (
+      <div className="panel">
+        <h1>Client settings</h1>
+        <p>Sign in with Puter to manage client settings.</p>
+        <button className="button" onClick={() => void session.signIn()} type="button">
+          Sign in
+        </button>
+      </div>
+    );
+  }
+
+  const isLoadingAccess =
+    currentUser.status === "loading" ||
+    savedProvider.status === "loading" ||
+    providerClients.status === "loading";
+  const isProviderOwner = Boolean(provider && currentUser.data?.username === provider.fields.ownerUsername);
+  const isClientChildOfProvider = Boolean(client);
+
+  if (isLoadingAccess) {
+    return (
+      <div className="panel panel--wide">
+        <p className="eyebrow">Client settings</p>
+        <h1>Checking access…</h1>
+      </div>
+    );
+  }
+
+  if (!provider || !client || !isProviderOwner || !isClientChildOfProvider) {
+    return (
+      <div className="panel panel--wide">
+        <p className="eyebrow">Client settings</p>
+        <h1>Access denied</h1>
+        <p>Only the provider who owns this workspace can edit this client’s scheduling settings.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel panel--wide">
+      <p className="eyebrow">Client settings</p>
+      <h1>{client.fields.fullName}</h1>
+      <div className="stack-sm">
+        <label className="field">
+          <span>Minimum visit</span>
+          <select
+            value={minimumDurationMinutes}
+            onChange={(event) => setMinimumDurationMinutes(Number(event.target.value))}
+          >
+            {[120, 180, 240, 360, 480].map((value) => (
+              <option key={value} value={value}>
+                {value / 60}h
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Travel time</span>
+          <input
+            min={0}
+            step={5}
+            type="number"
+            value={travelTimeMinutes}
+            onChange={(event) => setTravelTimeMinutes(Number(event.target.value))}
+          />
+        </label>
+        {status ? <div className="status-banner">{status}</div> : null}
+        <div className="row-actions">
+          <button
+            className="button"
+            onClick={async () => {
+              try {
+                await updateClientSettings(client, {
+                  minimumDurationMinutes,
+                  travelTimeMinutes,
+                });
+                setStatus("Client settings saved.");
+              } catch (error) {
+                setStatus("Could not save client settings.");
+              }
+            }}
+            type="button"
+          >
+            Save settings
+          </button>
+          <a className="button button--ghost" href="/provider">
+            Back to provider
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}

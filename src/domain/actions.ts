@@ -10,95 +10,60 @@ type SessionRow = RowHandle<Schema, "sessions">;
 type BlockRow = RowHandle<Schema, "personalBlocks">;
 type BaseAvailabilityRow = RowHandle<Schema, "baseAvailabilityWindows">;
 
-export interface ClientConfigInput {
+export interface CreateClientInput {
   fullName: string;
-  email: string;
-  phone?: string;
-  address: string;
+}
+
+export interface ClientSettingsInput {
   minimumDurationMinutes: number;
-  travelBeforeMin: number;
-  travelBeforeMax: number;
-  travelAfterMin: number;
-  travelAfterMax: number;
-  earlyStartEnabled: boolean;
-  allowedWeekdays: number[];
-  dayWindows: Record<number, { startMinutes: number; endMinutes: number; earliestStartMinutes?: number }>;
+  travelTimeMinutes: number;
 }
 
 const DEFAULT_PROVIDER_WINDOWS = [
-  { weekday: 1, startMinutes: 8 * 60, endMinutes: 13 * 60, sortKey: 1080 },
-  { weekday: 1, startMinutes: 14 * 60, endMinutes: 19 * 60, sortKey: 1140 },
-  { weekday: 2, startMinutes: 8 * 60, endMinutes: 13 * 60, sortKey: 2080 },
-  { weekday: 2, startMinutes: 14 * 60, endMinutes: 19 * 60, sortKey: 2140 },
-  { weekday: 3, startMinutes: 8 * 60, endMinutes: 13 * 60, sortKey: 3080 },
-  { weekday: 3, startMinutes: 14 * 60, endMinutes: 19 * 60, sortKey: 3140 },
-  { weekday: 4, startMinutes: 8 * 60, endMinutes: 13 * 60, sortKey: 4080 },
-  { weekday: 4, startMinutes: 14 * 60, endMinutes: 19 * 60, sortKey: 4140 },
-  { weekday: 5, startMinutes: 8 * 60, endMinutes: 13 * 60, sortKey: 5080 },
-  { weekday: 5, startMinutes: 14 * 60, endMinutes: 19 * 60, sortKey: 5140 },
+  { weekday: 1, startMinutes: 8 * 60, endMinutes: 13 * 60, status: "active", sortKey: 1080 },
+  { weekday: 1, startMinutes: 14 * 60, endMinutes: 19 * 60, status: "active", sortKey: 1140 },
+  { weekday: 2, startMinutes: 8 * 60, endMinutes: 13 * 60, status: "active", sortKey: 2080 },
+  { weekday: 2, startMinutes: 14 * 60, endMinutes: 19 * 60, status: "active", sortKey: 2140 },
+  { weekday: 3, startMinutes: 8 * 60, endMinutes: 13 * 60, status: "active", sortKey: 3080 },
+  { weekday: 3, startMinutes: 14 * 60, endMinutes: 19 * 60, status: "active", sortKey: 3140 },
+  { weekday: 4, startMinutes: 8 * 60, endMinutes: 13 * 60, status: "active", sortKey: 4080 },
+  { weekday: 4, startMinutes: 14 * 60, endMinutes: 19 * 60, status: "active", sortKey: 4140 },
+  { weekday: 5, startMinutes: 8 * 60, endMinutes: 13 * 60, status: "active", sortKey: 5080 },
+  { weekday: 5, startMinutes: 14 * 60, endMinutes: 19 * 60, status: "active", sortKey: 5140 },
 ];
 
-export async function createPractice(displayName: string, timezone: string) {
+export async function createPractice(displayName: string, timezone: string, ownerUsername: string) {
   const providerWrite = db.create("providers", {
     displayName,
     timezone,
+    ownerUsername,
     defaultWeekHorizon: 4,
   });
 
-  try {
-    const provider = await providerWrite.committed;
+  const provider = await providerWrite.committed;
 
-    await Promise.all(
-      DEFAULT_PROVIDER_WINDOWS.map(async (window) => {
-        const availabilityWrite = db.create("baseAvailabilityWindows", window, { in: provider });
-        await availabilityWrite.committed;
-      }),
-    );
+  await Promise.all(
+    DEFAULT_PROVIDER_WINDOWS.map(async (window) => {
+      const availabilityWrite = db.create("baseAvailabilityWindows", window, { in: provider });
+      await availabilityWrite.committed;
+    }),
+  );
 
-    return provider;
-  } catch (error) {
-    throw error;
-  }
+  return provider;
 }
 
-export async function createClientInvite(provider: ProviderRow, input: ClientConfigInput) {
+export async function createClient(provider: ProviderRow, input: CreateClientInput) {
   const clientWrite = db.create(
     "clients",
     {
       fullName: input.fullName,
-      email: input.email,
-      phone: input.phone,
-      address: input.address,
       status: "active",
-      minimumDurationMinutes: input.minimumDurationMinutes,
-      travelBeforeMin: input.travelBeforeMin,
-      travelBeforeMax: input.travelBeforeMax,
-      travelAfterMin: input.travelAfterMin,
-      travelAfterMax: input.travelAfterMax,
-      earlyStartEnabled: input.earlyStartEnabled,
+      minimumDurationMinutes: 180,
+      travelTimeMinutes: 30,
     },
     { in: provider },
   );
   const client = await clientWrite.committed;
-
-  await Promise.all(
-    input.allowedWeekdays.map((weekday) => {
-      const dayWindow = input.dayWindows[weekday];
-      return db
-        .create(
-          "clientAllowedWindows",
-          {
-            weekday,
-            startMinutes: dayWindow.startMinutes,
-            endMinutes: dayWindow.endMinutes,
-            earliestStartMinutes: dayWindow.earliestStartMinutes,
-            sortKey: weekday * 1000 + dayWindow.startMinutes,
-          },
-          { in: client },
-        )
-        .committed;
-    }),
-  );
 
   const token = db.createInviteToken(provider).value;
   const url = new URL(db.createShareLink(provider, token.token));
@@ -108,6 +73,15 @@ export async function createClientInvite(provider: ProviderRow, input: ClientCon
   url.searchParams.set("providerName", provider.fields.displayName);
 
   return { client, inviteLink: url.toString() };
+}
+
+export async function updateClientSettings(client: ClientRow, input: ClientSettingsInput) {
+  return db
+    .update("clients", client, {
+      minimumDurationMinutes: input.minimumDurationMinutes,
+      travelTimeMinutes: input.travelTimeMinutes,
+    })
+    .committed;
 }
 
 export async function createSessionBooking(args: {
@@ -120,12 +94,15 @@ export async function createSessionBooking(args: {
     args.draft.guaranteedStartAt,
   )}`;
 
+  const startsAt = args.draft.guaranteedStartAt;
+  const endsAt = args.draft.guaranteedStartAt + args.draft.durationMinutes * 60 * 1000;
+
   const sessionWrite = db.create(
     "sessions",
     {
-      startsAt: args.draft.startsAt,
+      startsAt,
       guaranteedStartAt: args.draft.guaranteedStartAt,
-      earliestStartAt: args.draft.earliestStartAt,
+      earliestStartAt: undefined,
       durationMinutes: args.draft.durationMinutes,
       status: "confirmed",
       bookedByRole: args.bookedByRole,
@@ -139,8 +116,8 @@ export async function createSessionBooking(args: {
     .create(
       "publicBusyWindows",
       {
-        startsAt: args.draft.startsAt,
-        endsAt: args.draft.guaranteedStartAt + args.draft.durationMinutes * 60 * 1000,
+        startsAt,
+        endsAt,
         kind: "session",
         originRef: session.id,
         label: sessionLabel,
@@ -156,10 +133,6 @@ export async function createSessionBooking(args: {
         weekday: weekdayFromTimestamp(args.draft.guaranteedStartAt),
         startMinutes: minutesFromTimestamp(args.draft.guaranteedStartAt),
         durationMinutes: args.draft.durationMinutes,
-        earliestStartMinutes:
-          args.draft.earliestStartAt === undefined
-            ? undefined
-            : minutesFromTimestamp(args.draft.earliestStartAt),
         label: sessionLabel,
         lastUsedAt: Date.now(),
       },
@@ -170,10 +143,14 @@ export async function createSessionBooking(args: {
   return session;
 }
 
+async function findProviderBusyWindow(provider: ProviderRow, originRef: string, kind: "block" | "session") {
+  const busyRows = await db.query("publicBusyWindows", { in: provider, index: "byStart", order: "asc" });
+  return busyRows.find((row) => row.fields.originRef === originRef && row.fields.kind === kind);
+}
+
 export async function cancelSession(provider: ProviderRow, session: SessionRow) {
   await db.update("sessions", session, { status: "canceled" }).committed;
-  const busyRows = await db.query("publicBusyWindows", { in: provider, index: "byStart", order: "asc" });
-  const busyRow = busyRows.find((row) => row.fields.originRef === session.id && row.fields.kind === "session");
+  const busyRow = await findProviderBusyWindow(provider, session.id, "session");
   if (busyRow) {
     await db.update("publicBusyWindows", busyRow, { kind: "inactive" }).committed;
   }
@@ -183,15 +160,16 @@ export async function createPersonalBlock(args: {
   provider: ProviderRow;
   startsAt: number;
   endsAt: number;
-  label: string;
+  label?: string;
 }) {
+  const label = args.label ?? "Personal block";
   const blockWrite = db.create(
     "personalBlocks",
     {
       startsAt: args.startsAt,
       endsAt: args.endsAt,
       source: "manual",
-      label: args.label,
+      label,
     },
     { in: args.provider },
   );
@@ -205,7 +183,7 @@ export async function createPersonalBlock(args: {
         endsAt: args.endsAt,
         kind: "block",
         originRef: block.id,
-        label: args.label,
+        label,
       },
       { in: args.provider },
     )
@@ -214,13 +192,63 @@ export async function createPersonalBlock(args: {
   return block;
 }
 
+export async function updatePersonalBlock(args: {
+  provider: ProviderRow;
+  block: BlockRow;
+  startsAt: number;
+  endsAt: number;
+  label?: string;
+}) {
+  const label = args.label ?? args.block.fields.label ?? "Personal block";
+  const block = await db
+    .update("personalBlocks", args.block, {
+      startsAt: args.startsAt,
+      endsAt: args.endsAt,
+      label,
+    })
+    .committed;
+
+  const busyRow = await findProviderBusyWindow(args.provider, args.block.id, "block");
+  if (busyRow) {
+    await db
+      .update("publicBusyWindows", busyRow, {
+        startsAt: args.startsAt,
+        endsAt: args.endsAt,
+        label,
+      })
+      .committed;
+  }
+
+  return block;
+}
+
 export async function deactivatePersonalBlock(provider: ProviderRow, block: BlockRow) {
   await db.update("personalBlocks", block, { source: "inactive" }).committed;
-  const busyRows = await db.query("publicBusyWindows", { in: provider, index: "byStart", order: "asc" });
-  const busyRow = busyRows.find((row) => row.fields.originRef === block.id && row.fields.kind === "block");
+  const busyRow = await findProviderBusyWindow(provider, block.id, "block");
   if (busyRow) {
     await db.update("publicBusyWindows", busyRow, { kind: "inactive" }).committed;
   }
+}
+
+export async function createBaseAvailabilityWindow(args: {
+  provider: ProviderRow;
+  weekday: number;
+  startMinutes: number;
+  endMinutes: number;
+}) {
+  return db
+    .create(
+      "baseAvailabilityWindows",
+      {
+        weekday: args.weekday,
+        startMinutes: args.startMinutes,
+        endMinutes: args.endMinutes,
+        status: "active",
+        sortKey: args.weekday * 1000 + args.startMinutes,
+      },
+      { in: args.provider },
+    )
+    .committed;
 }
 
 export async function updateBaseAvailabilityWindow(
@@ -231,7 +259,12 @@ export async function updateBaseAvailabilityWindow(
     .update("baseAvailabilityWindows", window, {
       startMinutes: input.startMinutes,
       endMinutes: input.endMinutes,
+      status: "active",
       sortKey: window.fields.weekday * 1000 + input.startMinutes,
     })
     .committed;
+}
+
+export async function deactivateBaseAvailabilityWindow(window: BaseAvailabilityRow) {
+  return db.update("baseAvailabilityWindows", window, { status: "inactive" }).committed;
 }

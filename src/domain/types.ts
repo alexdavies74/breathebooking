@@ -1,6 +1,8 @@
 import type { RowRef } from "@vennbase/core";
 
 export type Role = "provider" | "client";
+export type WeekBlockKind = "availability" | "personal-block" | "session" | "busy";
+export type ProviderEditableKind = "availability" | "personal-block";
 
 export type WeekBlockState =
   | "available"
@@ -20,6 +22,9 @@ export interface WeekBlock {
   guaranteedStartAt?: number;
   earliestStartAt?: number;
   sessionRef?: RowRef<"sessions">;
+  sourceKind?: WeekBlockKind;
+  sourceId?: string;
+  weekday?: number;
 }
 
 export interface SlotShape {
@@ -44,24 +49,30 @@ export interface SyncConflict {
   message: string;
 }
 
+export interface ProviderRangeDraft {
+  id: string;
+  sourceKind: ProviderEditableKind;
+  sourceId?: string;
+  dayKey: string;
+  dayStart: number;
+  weekday: number;
+  startMinutes: number;
+  endMinutes: number;
+  isNew: boolean;
+}
+
 export interface ProviderSummary {
   id: string;
   displayName: string;
   timezone: string;
+  ownerUsername: string;
   defaultWeekHorizon: number;
 }
 
 export interface ClientSummary {
   id: string;
   fullName: string;
-  email: string;
-  phone?: string;
-  address: string;
   status: string;
   minimumDurationMinutes: number;
-  travelBeforeMin: number;
-  travelBeforeMax: number;
-  travelAfterMin: number;
-  travelAfterMax: number;
-  earlyStartEnabled: boolean;
+  travelTimeMinutes: number;
 }

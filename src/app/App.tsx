@@ -4,6 +4,7 @@ import { db } from "../lib/db";
 import { ClientHomeRoute } from "../routes/ClientHomeRoute";
 import { InviteRoute } from "../routes/InviteRoute";
 import { LandingRoute } from "../routes/LandingRoute";
+import { ProviderClientSettingsRoute } from "../routes/ProviderClientSettingsRoute";
 import { ProviderDashboardRoute } from "../routes/ProviderDashboardRoute";
 
 export function App() {
@@ -30,6 +31,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<LandingRoute session={session} />} />
             <Route path="/provider" element={<ProviderDashboardRoute session={session} />} />
+            <Route path="/provider/clients/:clientId/settings" element={<ProviderClientSettingsRoute session={session} />} />
             <Route path="/invite" element={<InviteRoute session={session} />} />
             <Route path="/client/:clientId" element={<ClientHomeRoute session={session} />} />
           </Routes>

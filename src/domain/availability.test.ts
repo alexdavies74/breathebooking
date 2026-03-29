@@ -18,18 +18,18 @@ function row<TCollection extends keyof Schema & string>(
 }
 
 describe("availability engine", () => {
-  it("creates maybe blocks when an earliest start exists", () => {
+  it("builds client availability from provider base windows", () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const weekday = today.getDay();
 
     const blocks = buildClientWeekBlocks({
-      allowedWindows: [
-        row("clientAllowedWindows", "window-1", {
+      baseAvailability: [
+        row("baseAvailabilityWindows", "window-1", {
           weekday,
           startMinutes: 9 * 60,
           endMinutes: 13 * 60,
-          earliestStartMinutes: 8 * 60 + 30,
+          status: "active",
           sortKey: 1,
         }),
       ],
@@ -37,33 +37,28 @@ describe("availability engine", () => {
       publicBusyWindows: [],
       client: row("clients", "client-1", {
         fullName: "A",
-        email: "a@example.com",
-        address: "Somewhere",
         status: "active",
         minimumDurationMinutes: 180,
-        travelBeforeMin: 20,
-        travelBeforeMax: 40,
-        travelAfterMin: 10,
-        travelAfterMax: 20,
-        earlyStartEnabled: true,
+        travelTimeMinutes: 30,
       }),
       horizonDays: 1,
     });
 
-    expect(blocks.map((block) => block.state)).toEqual(["maybe", "available"]);
+    expect(blocks.map((block) => block.state)).toEqual(["available"]);
   });
 
-  it("removes availability when busy windows overlap", () => {
+  it("buffers busy windows by client travel time before subtracting availability", () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const weekday = today.getDay();
 
     const blocks = buildClientWeekBlocks({
-      allowedWindows: [
-        row("clientAllowedWindows", "window-1", {
+      baseAvailability: [
+        row("baseAvailabilityWindows", "window-1", {
           weekday,
           startMinutes: 9 * 60,
           endMinutes: 14 * 60,
+          status: "active",
           sortKey: 1,
         }),
       ],
@@ -79,21 +74,16 @@ describe("availability engine", () => {
       ],
       client: row("clients", "client-1", {
         fullName: "A",
-        email: "a@example.com",
-        address: "Somewhere",
         status: "active",
         minimumDurationMinutes: 180,
-        travelBeforeMin: 20,
-        travelBeforeMax: 40,
-        travelAfterMin: 10,
-        travelAfterMax: 20,
-        earlyStartEnabled: true,
+        travelTimeMinutes: 30,
       }),
       horizonDays: 1,
     });
 
     expect(blocks.some((block) => block.state === "booked-other")).toBe(true);
     expect(blocks.filter((block) => block.state === "available")).toHaveLength(2);
+    expect(minutesFromTimestamp(blocks.find((block) => block.state === "available")?.endsAt ?? 0)).toBe(9 * 60 + 30);
   });
 
   it("matches the next slot by weekday and duration", () => {
@@ -134,5 +124,6 @@ describe("availability engine", () => {
 
     expect(toDayKey(draft.guaranteedStartAt)).toBe("2026-03-30");
     expect(minutesFromTimestamp(draft.guaranteedStartAt)).toBe(9 * 60);
+    expect(draft.startsAt).toBe(draft.guaranteedStartAt);
   });
 });

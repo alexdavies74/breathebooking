@@ -5,6 +5,7 @@ export const schema = defineSchema({
     fields: {
       displayName: field.string(),
       timezone: field.string(),
+      ownerUsername: field.string(),
       defaultWeekHorizon: field.number().default(4),
     },
     indexes: {
@@ -17,6 +18,7 @@ export const schema = defineSchema({
       weekday: field.number(),
       startMinutes: field.number(),
       endMinutes: field.number(),
+      status: field.string().default("active"),
       sortKey: field.number(),
     },
     indexes: {
@@ -28,16 +30,17 @@ export const schema = defineSchema({
     in: ["providers"],
     fields: {
       fullName: field.string(),
-      email: field.string(),
+      email: field.string().optional(),
       phone: field.string().optional(),
-      address: field.string(),
+      address: field.string().optional(),
       status: field.string(),
-      minimumDurationMinutes: field.number(),
-      travelBeforeMin: field.number(),
-      travelBeforeMax: field.number(),
-      travelAfterMin: field.number(),
-      travelAfterMax: field.number(),
-      earlyStartEnabled: field.boolean().default(false),
+      minimumDurationMinutes: field.number().default(180),
+      travelTimeMinutes: field.number().default(30),
+      travelBeforeMin: field.number().optional(),
+      travelBeforeMax: field.number().optional(),
+      travelAfterMin: field.number().optional(),
+      travelAfterMax: field.number().optional(),
+      earlyStartEnabled: field.boolean().optional(),
     },
     indexes: {
       byName: index("fullName"),

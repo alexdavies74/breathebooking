@@ -4,15 +4,19 @@ import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
 import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
 import {
-  createClientInvite,
+  createBaseAvailabilityWindow,
+  createClient,
   createPersonalBlock,
   createPractice,
+  deactivateBaseAvailabilityWindow,
+  deactivatePersonalBlock,
   updateBaseAvailabilityWindow,
+  updatePersonalBlock,
 } from "../domain/actions";
 import { buildProviderWeekBlocks } from "../domain/availability";
 import { manualCalendarSyncAdapter } from "../domain/calendarSync";
-import { formatTime, minutesFromTimestamp, timestampFromDayAndMinutes } from "../domain/date";
-import { RangeEditor } from "../components/RangeEditor";
+import { clamp, minutesFromTimestamp, timestampFromDayAndMinutes, toDayKey, weekdayFromTimestamp } from "../domain/date";
+import type { ProviderEditableKind, ProviderRangeDraft, WeekBlock } from "../domain/types";
 import { WeekView } from "../components/WeekView";
 import { db } from "../lib/db";
 import type { Schema } from "../lib/schema";
@@ -21,13 +25,33 @@ interface ProviderDashboardRouteProps {
   session: UseSessionResult;
 }
 
-const WEEKDAYS = [
-  { value: 1, label: "Mon" },
-  { value: 2, label: "Tue" },
-  { value: 3, label: "Wed" },
-  { value: 4, label: "Thu" },
-  { value: 5, label: "Fri" },
-];
+const DEFAULT_AVAILABILITY_DURATION = 120;
+const DEFAULT_BLOCK_DURATION = 60;
+const DAY_START_MINUTES = 6 * 60;
+const DAY_END_MINUTES = 22 * 60;
+
+function createDraftId(kind: ProviderEditableKind, dayKey: string) {
+  return `draft-${kind}-${dayKey}-${Date.now()}`;
+}
+
+function createDraftFromBlock(block: WeekBlock): ProviderRangeDraft | null {
+  if ((block.sourceKind !== "availability" && block.sourceKind !== "personal-block") || !block.sourceId) {
+    return null;
+  }
+
+  const dayStart = new Date(`${block.dayKey}T00:00:00`).getTime();
+  return {
+    id: `${block.sourceKind}-${block.sourceId}-${block.dayKey}`,
+    sourceKind: block.sourceKind,
+    sourceId: block.sourceId,
+    dayKey: block.dayKey,
+    dayStart,
+    weekday: block.weekday ?? weekdayFromTimestamp(dayStart),
+    startMinutes: minutesFromTimestamp(block.startsAt),
+    endMinutes: minutesFromTimestamp(block.endsAt),
+    isNew: false,
+  };
+}
 
 export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps) {
   const currentUser = useCurrentUser(db, { enabled: Boolean(session.session?.signedIn) });
@@ -59,34 +83,10 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [inviteQr, setInviteQr] = useState<string | null>(null);
   const [createPracticeStatus, setCreatePracticeStatus] = useState<string | null>(null);
-  const [availabilityStatus, setAvailabilityStatus] = useState<string | null>(null);
-  const [availabilityDrafts, setAvailabilityDrafts] = useState<Record<string, { startMinutes: number; endMinutes: number }>>({});
-  const [clientForm, setClientForm] = useState({
-    fullName: "",
-    email: "",
-    phone: "",
-    address: "",
-    minimumDurationMinutes: 180,
-    travelBeforeMin: 20,
-    travelBeforeMax: 40,
-    travelAfterMin: 10,
-    travelAfterMax: 20,
-    earlyStartEnabled: true,
-    allowedWeekdays: [1, 2, 3, 4, 5],
-    dayWindows: {
-      1: { startMinutes: 9 * 60, endMinutes: 13 * 60, earliestStartMinutes: 8 * 60 + 30 },
-      2: { startMinutes: 9 * 60, endMinutes: 13 * 60, earliestStartMinutes: 8 * 60 + 30 },
-      3: { startMinutes: 9 * 60, endMinutes: 13 * 60, earliestStartMinutes: 8 * 60 + 30 },
-      4: { startMinutes: 9 * 60, endMinutes: 13 * 60, earliestStartMinutes: 8 * 60 + 30 },
-      5: { startMinutes: 9 * 60, endMinutes: 13 * 60, earliestStartMinutes: 8 * 60 + 30 },
-    } as Record<number, { startMinutes: number; endMinutes: number; earliestStartMinutes?: number }>,
-  });
-  const [blockDraft, setBlockDraft] = useState({
-    weekday: 1,
-    startMinutes: 12 * 60,
-    endMinutes: 14 * 60,
-    label: "Personal errand",
-  });
+  const [clientStatus, setClientStatus] = useState<string | null>(null);
+  const [providerEditMode, setProviderEditMode] = useState<ProviderEditableKind>("availability");
+  const [providerDraft, setProviderDraft] = useState<ProviderRangeDraft | null>(null);
+  const [clientName, setClientName] = useState("");
 
   const blocks = useMemo(() => {
     return buildProviderWeekBlocks({
@@ -97,11 +97,24 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
     });
   }, [availability.rows, horizonDays, personalBlocks.rows, sessions.rows]);
 
+  const availabilityById = useMemo(
+    () => new Map(availability.rows.map((row) => [row.id, row])),
+    [availability.rows],
+  );
+  const personalBlocksById = useMemo(
+    () => new Map(personalBlocks.rows.map((row) => [row.id, row])),
+    [personalBlocks.rows],
+  );
+
   useEffect(() => {
     if (!provider && currentUser.data?.username) {
       setPracticeName(`${currentUser.data.username}'s care practice`);
     }
   }, [currentUser.data?.username, provider]);
+
+  useEffect(() => {
+    setProviderDraft(null);
+  }, [providerEditMode]);
 
   useEffect(() => {
     if (!inviteLink) {
@@ -117,25 +130,6 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
       setCalendarStatus(status.enabled ? "Calendar sync connected." : "Calendar sync is stubbed for v1.");
     });
   }, []);
-
-  useEffect(() => {
-    setAvailabilityDrafts((current) => {
-      const next = { ...current };
-      let changed = false;
-
-      availability.rows.forEach((row) => {
-        if (!next[row.id]) {
-          next[row.id] = {
-            startMinutes: row.fields.startMinutes,
-            endMinutes: row.fields.endMinutes,
-          };
-          changed = true;
-        }
-      });
-
-      return changed ? next : current;
-    });
-  }, [availability.rows]);
 
   if (!session.session?.signedIn) {
     return (
@@ -162,12 +156,18 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
         <button
           className="button"
           onClick={async () => {
+            const ownerUsername = currentUser.data?.username;
+            if (!ownerUsername) {
+              setCreatePracticeStatus("We could not confirm the signed-in provider username yet.");
+              return;
+            }
+
             const nextPracticeName = practiceName || "Breathe Practice";
             const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
             setCreatePracticeStatus("Creating practice…");
 
             try {
-              const nextProvider = await createPractice(nextPracticeName, timezone);
+              const nextProvider = await createPractice(nextPracticeName, timezone, ownerUsername);
               await savedProvider.save(nextProvider);
               setCreatePracticeStatus(`Create practice succeeded for ${nextPracticeName}.`);
             } catch (error) {
@@ -182,6 +182,88 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
     );
   }
 
+  async function saveProviderDraft() {
+    const activeProvider = provider;
+    if (!activeProvider || !providerDraft) {
+      return;
+    }
+
+    try {
+      if (providerDraft.sourceKind === "availability") {
+        if (providerDraft.isNew) {
+          await createBaseAvailabilityWindow({
+            provider: activeProvider,
+            weekday: providerDraft.weekday,
+            startMinutes: providerDraft.startMinutes,
+            endMinutes: providerDraft.endMinutes,
+          });
+        } else if (providerDraft.sourceId) {
+          const window = availabilityById.get(providerDraft.sourceId);
+          if (!window) {
+            setClientStatus("That availability window is no longer available to edit.");
+            return;
+          }
+
+          await updateBaseAvailabilityWindow(window, {
+            startMinutes: providerDraft.startMinutes,
+            endMinutes: providerDraft.endMinutes,
+          });
+        }
+      } else if (providerDraft.isNew) {
+        await createPersonalBlock({
+          provider: activeProvider,
+          startsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.startMinutes),
+          endsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.endMinutes),
+        });
+      } else if (providerDraft.sourceId) {
+        const block = personalBlocksById.get(providerDraft.sourceId);
+        if (!block) {
+          setClientStatus("That personal block is no longer available to edit.");
+          return;
+        }
+
+        await updatePersonalBlock({
+          provider: activeProvider,
+          block,
+          startsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.startMinutes),
+          endsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.endMinutes),
+        });
+      }
+
+      setClientStatus(`${providerEditMode === "availability" ? "Availability" : "Personal block"} saved.`);
+      setProviderDraft(null);
+    } catch (error) {
+      setClientStatus(`Could not save that ${providerEditMode === "availability" ? "availability range" : "personal block"}.`);
+    }
+  }
+
+  async function deleteProviderDraft() {
+    const activeProvider = provider;
+    if (!activeProvider || !providerDraft || providerDraft.isNew || !providerDraft.sourceId) {
+      setProviderDraft(null);
+      return;
+    }
+
+    try {
+      if (providerDraft.sourceKind === "availability") {
+        const window = availabilityById.get(providerDraft.sourceId);
+        if (window) {
+          await deactivateBaseAvailabilityWindow(window);
+        }
+      } else {
+        const block = personalBlocksById.get(providerDraft.sourceId);
+        if (block) {
+          await deactivatePersonalBlock(activeProvider, block);
+        }
+      }
+
+      setClientStatus(`${providerDraft.sourceKind === "availability" ? "Availability" : "Personal block"} deleted.`);
+      setProviderDraft(null);
+    } catch (error) {
+      setClientStatus("Could not delete that range.");
+    }
+  }
+
   return (
     <div className="page-grid">
       <section className="panel panel--wide">
@@ -193,215 +275,98 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
           <div className="sync-pill">Manual sync only · {calendarStatus}</div>
         </div>
 
-        <WeekView role="provider" blocks={blocks} horizonDays={horizonDays} onExtendHorizon={setHorizonDays} />
+        <div className="stack-sm">
+          <div className="chip-row">
+            <button
+              className={`chip ${providerEditMode === "availability" ? "chip--active" : ""}`}
+              onClick={() => setProviderEditMode("availability")}
+              type="button"
+            >
+              Availability
+            </button>
+            <button
+              className={`chip ${providerEditMode === "personal-block" ? "chip--active" : ""}`}
+              onClick={() => setProviderEditMode("personal-block")}
+              type="button"
+            >
+              Personal blocks
+            </button>
+          </div>
+          <p>
+            Click empty space to create a {providerEditMode === "availability" ? "weekly availability window" : "personal block"}.
+            Click an existing {providerEditMode === "availability" ? "window" : "block"} to edit it inline.
+          </p>
+          {clientStatus ? <div className="status-banner">{clientStatus}</div> : null}
+        </div>
+
+        <WeekView
+          role="provider"
+          blocks={blocks}
+          horizonDays={horizonDays}
+          onExtendHorizon={setHorizonDays}
+          providerEdit={{
+            mode: providerEditMode,
+            draft: providerDraft,
+            onCreateDraft: (dayStart, startMinutes) => {
+              const duration = providerEditMode === "availability" ? DEFAULT_AVAILABILITY_DURATION : DEFAULT_BLOCK_DURATION;
+              const clampedStart = clamp(startMinutes, DAY_START_MINUTES, DAY_END_MINUTES - duration);
+              setProviderDraft({
+                id: createDraftId(providerEditMode, toDayKey(dayStart)),
+                sourceKind: providerEditMode,
+                dayKey: toDayKey(dayStart),
+                dayStart,
+                weekday: weekdayFromTimestamp(dayStart),
+                startMinutes: clampedStart,
+                endMinutes: clampedStart + duration,
+                isNew: true,
+              });
+            },
+            onEditBlock: (block) => {
+              const nextDraft = createDraftFromBlock(block);
+              if (nextDraft) {
+                setProviderDraft(nextDraft);
+              }
+            },
+            onChangeDraft: setProviderDraft,
+            onSaveDraft: () => {
+              void saveProviderDraft();
+            },
+            onDeleteDraft: () => {
+              void deleteProviderDraft();
+            },
+          }}
+        />
       </section>
 
       <aside className="stack">
         <section className="panel">
-          <p className="eyebrow">Base availability</p>
-          <h2>Adjust your weekly template</h2>
-          <p>These drag handles edit the default windows your clients inherit before client-specific narrowing and manual blocks.</p>
-          {availabilityStatus ? <div className="status-banner">{availabilityStatus}</div> : null}
-          <div className="stack-sm">
-            {availability.rows.map((row, index) => {
-              const draft = availabilityDrafts[row.id] ?? {
-                startMinutes: row.fields.startMinutes,
-                endMinutes: row.fields.endMinutes,
-              };
-              const weekdayLabel = WEEKDAYS.find((weekday) => weekday.value === row.fields.weekday)?.label ?? "Day";
-              const windowLabel = index > 0 && availability.rows[index - 1]?.fields.weekday === row.fields.weekday ? "Window 2" : "Window 1";
-
-              return (
-                <div className="range-card" key={row.id}>
-                  <span className="eyebrow">
-                    {weekdayLabel} · {windowLabel}
-                  </span>
-                  <RangeEditor
-                    minMinutes={6 * 60}
-                    maxMinutes={22 * 60}
-                    step={30}
-                    minDurationMinutes={60}
-                    startMinutes={draft.startMinutes}
-                    endMinutes={draft.endMinutes}
-                    onChange={(next) =>
-                      setAvailabilityDrafts((current) => ({
-                        ...current,
-                        [row.id]: {
-                          startMinutes: next.startMinutes,
-                          endMinutes: next.endMinutes,
-                        },
-                      }))
-                    }
-                  />
-                  <button
-                    className="button button--ghost"
-                    onClick={async () => {
-                      try {
-                        await updateBaseAvailabilityWindow(row, draft);
-                        setAvailabilityStatus(`Saved ${weekdayLabel.toLowerCase()} availability.`);
-                      } catch (error) {
-                        setAvailabilityStatus(`Could not save ${weekdayLabel.toLowerCase()} availability.`);
-                      }
-                    }}
-                    type="button"
-                  >
-                    Save window
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="panel">
           <p className="eyebrow">New client</p>
-          <h2>Generate invite link</h2>
+          <h2>Create client</h2>
           <div className="stack-sm">
             <label className="field">
               <span>Name</span>
-              <input
-                value={clientForm.fullName}
-                onChange={(event) => setClientForm((current) => ({ ...current, fullName: event.target.value }))}
-              />
+              <input value={clientName} onChange={(event) => setClientName(event.target.value)} />
             </label>
-            <label className="field">
-              <span>Email</span>
-              <input
-                value={clientForm.email}
-                onChange={(event) => setClientForm((current) => ({ ...current, email: event.target.value }))}
-              />
-            </label>
-            <label className="field">
-              <span>Phone</span>
-              <input
-                value={clientForm.phone}
-                onChange={(event) => setClientForm((current) => ({ ...current, phone: event.target.value }))}
-              />
-            </label>
-            <label className="field">
-              <span>Address</span>
-              <input
-                value={clientForm.address}
-                onChange={(event) => setClientForm((current) => ({ ...current, address: event.target.value }))}
-              />
-            </label>
-
-            <div className="split-grid">
-              <label className="field">
-                <span>Minimum visit</span>
-                <select
-                  value={clientForm.minimumDurationMinutes}
-                  onChange={(event) =>
-                    setClientForm((current) => ({ ...current, minimumDurationMinutes: Number(event.target.value) }))
-                  }
-                >
-                  {[120, 180, 240, 360, 480].map((value) => (
-                    <option key={value} value={value}>
-                      {value / 60}h
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Flex arrival</span>
-                <select
-                  value={String(clientForm.earlyStartEnabled)}
-                  onChange={(event) =>
-                    setClientForm((current) => ({ ...current, earlyStartEnabled: event.target.value === "true" }))
-                  }
-                >
-                  <option value="true">On</option>
-                  <option value="false">Off</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="split-grid">
-              <label className="field">
-                <span>Travel before min</span>
-                <input
-                  type="number"
-                  step={5}
-                  value={clientForm.travelBeforeMin}
-                  onChange={(event) =>
-                    setClientForm((current) => ({ ...current, travelBeforeMin: Number(event.target.value) }))
-                  }
-                />
-              </label>
-              <label className="field">
-                <span>Travel before max</span>
-                <input
-                  type="number"
-                  step={5}
-                  value={clientForm.travelBeforeMax}
-                  onChange={(event) =>
-                    setClientForm((current) => ({ ...current, travelBeforeMax: Number(event.target.value) }))
-                  }
-                />
-              </label>
-            </div>
-
-            <div className="chip-row">
-              {WEEKDAYS.map((weekday) => (
-                <button
-                  key={weekday.value}
-                  className={`chip ${clientForm.allowedWeekdays.includes(weekday.value) ? "chip--active" : ""}`}
-                  onClick={() =>
-                    setClientForm((current) => ({
-                      ...current,
-                      allowedWeekdays: current.allowedWeekdays.includes(weekday.value)
-                        ? current.allowedWeekdays.filter((value) => value !== weekday.value)
-                        : [...current.allowedWeekdays, weekday.value].sort(),
-                    }))
-                  }
-                  type="button"
-                >
-                  {weekday.label}
-                </button>
-              ))}
-            </div>
-
-            {clientForm.allowedWeekdays.map((weekday) => {
-              const window = clientForm.dayWindows[weekday];
-              return (
-                <div className="range-card" key={weekday}>
-                  <span className="eyebrow">{WEEKDAYS.find((item) => item.value === weekday)?.label}</span>
-                  <RangeEditor
-                    minMinutes={7 * 60}
-                    maxMinutes={20 * 60}
-                    step={30}
-                    minDurationMinutes={clientForm.minimumDurationMinutes}
-                    startMinutes={window.startMinutes}
-                    endMinutes={window.endMinutes}
-                    earliestStartMinutes={window.earliestStartMinutes}
-                    allowEarlyStart={clientForm.earlyStartEnabled}
-                    onChange={(next) =>
-                      setClientForm((current) => ({
-                        ...current,
-                        dayWindows: {
-                          ...current.dayWindows,
-                          [weekday]: {
-                            startMinutes: next.startMinutes,
-                            endMinutes: next.endMinutes,
-                            earliestStartMinutes: next.earliestStartMinutes,
-                          },
-                        },
-                      }))
-                    }
-                  />
-                </div>
-              );
-            })}
-
             <button
               className="button"
               onClick={async () => {
-                const result = await createClientInvite(provider, clientForm);
-                setInviteLink(result.inviteLink);
+                if (!clientName.trim()) {
+                  setClientStatus("Add a client name first.");
+                  return;
+                }
+
+                try {
+                  const result = await createClient(provider, { fullName: clientName.trim() });
+                  setInviteLink(result.inviteLink);
+                  setClientName("");
+                  setClientStatus(`Created ${result.client.fields.fullName}.`);
+                } catch (error) {
+                  setClientStatus("Could not create that client.");
+                }
               }}
               type="button"
             >
-              Generate invite link
+              Create client
             </button>
           </div>
 
@@ -418,84 +383,23 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
         </section>
 
         <section className="panel">
-          <p className="eyebrow">Personal block</p>
-          <h2>Add a block in context</h2>
-          <div className="split-grid">
-            <label className="field">
-              <span>Day</span>
-              <select
-                value={blockDraft.weekday}
-                onChange={(event) => setBlockDraft((current) => ({ ...current, weekday: Number(event.target.value) }))}
-              >
-                {WEEKDAYS.map((weekday) => (
-                  <option key={weekday.value} value={weekday.value}>
-                    {weekday.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Label</span>
-              <input
-                value={blockDraft.label}
-                onChange={(event) => setBlockDraft((current) => ({ ...current, label: event.target.value }))}
-              />
-            </label>
-          </div>
-
-          <RangeEditor
-            minMinutes={7 * 60}
-            maxMinutes={20 * 60}
-            step={30}
-            minDurationMinutes={30}
-            startMinutes={blockDraft.startMinutes}
-            endMinutes={blockDraft.endMinutes}
-            onChange={(next) =>
-              setBlockDraft((current) => ({
-                ...current,
-                startMinutes: next.startMinutes,
-                endMinutes: next.endMinutes,
-              }))
-            }
-          />
-
-          <button
-            className="button"
-            onClick={async () => {
-              const today = new Date();
-              const weekday = today.getDay();
-              const delta = (blockDraft.weekday - weekday + 7) % 7;
-              const targetDay = new Date(today);
-              targetDay.setHours(0, 0, 0, 0);
-              targetDay.setDate(today.getDate() + delta);
-              await createPersonalBlock({
-                provider,
-                startsAt: timestampFromDayAndMinutes(targetDay.getTime(), blockDraft.startMinutes),
-                endsAt: timestampFromDayAndMinutes(targetDay.getTime(), blockDraft.endMinutes),
-                label: blockDraft.label,
-              });
-            }}
-            type="button"
-          >
-            Add personal block
-          </button>
-        </section>
-
-        <section className="panel">
           <p className="eyebrow">Clients</p>
           <h2>Active roster</h2>
           <div className="stack-sm">
             {clients.rows.map((client) => (
               <div className="summary-card" key={client.id}>
                 <strong>{client.fields.fullName}</strong>
-                <p>{client.fields.email}</p>
                 <p>
-                  Minimum {client.fields.minimumDurationMinutes / 60}h · Travel {client.fields.travelBeforeMin}-
-                  {client.fields.travelBeforeMax} min
+                  Minimum {client.fields.minimumDurationMinutes / 60}h · Travel {client.fields.travelTimeMinutes} min
                 </p>
-                <a className="button button--ghost" href={`/client/${client.id}?providerId=${provider.id}`}>
-                  Open client view
-                </a>
+                <div className="row-actions">
+                  <a className="button button--ghost" href={`/client/${client.id}?providerId=${provider.id}`}>
+                    Open client view
+                  </a>
+                  <a className="button button--ghost" href={`/provider/clients/${client.id}/settings`}>
+                    Client settings
+                  </a>
+                </div>
               </div>
             ))}
           </div>

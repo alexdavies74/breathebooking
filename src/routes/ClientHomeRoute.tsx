@@ -41,10 +41,10 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     : clientParents.data?.find((row): row is RowRef<"providers"> => row.collection === "providers");
   const provider = useRow<Schema, "providers">(db, providerRef);
 
-  const allowedWindows = useQuery(
+  const baseAvailability = useQuery(
     db,
-    "clientAllowedWindows",
-    client.data ? { in: client.data.ref, index: "byWeekday", order: "asc" } : null,
+    "baseAvailabilityWindows",
+    provider.data ? { in: provider.data.ref, index: "byWeekday", order: "asc" } : null,
   );
   const sessions = useQuery(db, "sessions", client.data ? { in: client.data.ref, index: "byStart", order: "asc" } : null);
   const presets = useQuery(
@@ -64,13 +64,13 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     }
 
     return buildClientWeekBlocks({
-      allowedWindows: allowedWindows.rows,
+      baseAvailability: baseAvailability.rows,
       sessions: sessions.rows,
       publicBusyWindows: publicBusyWindows.rows,
       client: client.data,
       horizonDays,
     });
-  }, [allowedWindows.rows, client.data, horizonDays, publicBusyWindows.rows, sessions.rows]);
+  }, [baseAvailability.rows, client.data, horizonDays, publicBusyWindows.rows, sessions.rows]);
 
   const activeSessions = useMemo(
     () =>
@@ -245,20 +245,14 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
               earliestStartMinutes={
                 draft.earliestStartAt === undefined ? undefined : minutesFromTimestamp(draft.earliestStartAt)
               }
-              allowEarlyStart={selectedBlock.state === "maybe"}
+              allowEarlyStart={false}
               onChange={(next) => {
                 const dayStart = new Date(`${selectedBlock.dayKey}T00:00:00`).getTime();
                 setDraft({
                   ...draft,
                   guaranteedStartAt: dayStart + next.startMinutes * 60 * 1000,
-                  earliestStartAt:
-                    next.earliestStartMinutes === undefined
-                      ? undefined
-                      : dayStart + next.earliestStartMinutes * 60 * 1000,
-                  startsAt:
-                    next.earliestStartMinutes === undefined
-                      ? dayStart + next.startMinutes * 60 * 1000
-                      : dayStart + next.earliestStartMinutes * 60 * 1000,
+                  earliestStartAt: undefined,
+                  startsAt: dayStart + next.startMinutes * 60 * 1000,
                   endsAt: dayStart + next.endMinutes * 60 * 1000,
                   durationMinutes: next.endMinutes - next.startMinutes,
                   dayKey: toDayKey(dayStart),
@@ -315,8 +309,8 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
         {!selectedSession && !draft ? (
           <>
             <p className="eyebrow">How this works</p>
-            <h2>Hours start on arrival</h2>
-            <p>Maybe slots show an earliest possible arrival and a guaranteed start. We do not promise a fixed end time.</p>
+            <h2>Book within open provider hours</h2>
+            <p>Open slots already include the travel buffer configured for your account. Choose a start time and visit length.</p>
           </>
         ) : null}
       </aside>
