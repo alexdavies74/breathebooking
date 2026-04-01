@@ -93,7 +93,7 @@ describe("WeekView", () => {
             state: "booked-own",
             interactive: true,
             label: "My session",
-            sessionRef: { id: "session-1", collection: "sessions", baseUrl: "http://localhost" },
+            bookingRef: { id: "booking-1", collection: "bookings", baseUrl: "http://localhost" },
           },
         ]}
         onSelectBlock={onSelectBlock}

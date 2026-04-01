@@ -1,4 +1,4 @@
-import type { RowHandle } from "@vennbase/core";
+import type { DbQueryProjectedRow, RowHandle } from "@vennbase/core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildClientWeekBlocks,
@@ -23,6 +23,18 @@ function row<TCollection extends keyof Schema & string>(
   } as unknown as RowHandle<Schema, TCollection>;
 }
 
+function keyRow<TCollection extends "bookings" | "bookingBlocks">(
+  collection: TCollection,
+  id: string,
+  fields: Record<string, unknown>,
+): DbQueryProjectedRow<Schema, TCollection> {
+  return {
+    id,
+    collection,
+    fields,
+  } as unknown as DbQueryProjectedRow<Schema, TCollection>;
+}
+
 describe("availability engine", () => {
   it("builds client availability from provider base windows", () => {
     const today = new Date();
@@ -39,10 +51,12 @@ describe("availability engine", () => {
           sortKey: 1,
         }),
       ],
-      sessions: [],
-      publicBusyWindows: [],
+      bookings: [],
+      bookingBlocks: [],
+      savedBookings: [],
       client: row("clients", "client-1", {
         fullName: "A",
+        providerViewerLink: "http://localhost/invite",
         status: "active",
         minimumDurationMinutes: 180,
         travelTimeMinutes: 30,
@@ -53,7 +67,7 @@ describe("availability engine", () => {
     expect(blocks.map((block) => block.state)).toEqual(["available"]);
   });
 
-  it("buffers busy windows by client travel time before subtracting availability", () => {
+  it("buffers other bookings by client travel time before subtracting availability", () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const weekday = today.getDay();
@@ -68,18 +82,17 @@ describe("availability engine", () => {
           sortKey: 1,
         }),
       ],
-      sessions: [],
-      publicBusyWindows: [
-        row("publicBusyWindows", "busy-1", {
+      bookings: [
+        keyRow("bookings", "booking-2", {
           startsAt: today.getTime() + 10 * 60 * 60 * 1000,
           endsAt: today.getTime() + 12 * 60 * 60 * 1000,
-          kind: "session",
-          originRef: "other-session",
-          label: "Unavailable",
         }),
       ],
+      bookingBlocks: [],
+      savedBookings: [],
       client: row("clients", "client-1", {
         fullName: "A",
+        providerViewerLink: "http://localhost/invite",
         status: "active",
         minimumDurationMinutes: 30,
         travelTimeMinutes: 30,
@@ -106,18 +119,17 @@ describe("availability engine", () => {
             sortKey: 1,
           }),
         ],
-        sessions: [],
-        publicBusyWindows: [
-          row("publicBusyWindows", "busy-1", {
+        bookings: [],
+        bookingBlocks: [
+          keyRow("bookingBlocks", "block-1", {
             startsAt: new Date("2026-03-30T09:30:00").getTime(),
             endsAt: new Date("2026-03-30T13:30:00").getTime(),
-            kind: "personal",
-            originRef: "personal-1",
-            label: "Personal errand",
           }),
         ],
+        savedBookings: [],
         client: row("clients", "client-1", {
           fullName: "A",
+          providerViewerLink: "http://localhost/invite",
           status: "active",
           minimumDurationMinutes: 180,
           travelTimeMinutes: 30,
@@ -139,12 +151,12 @@ describe("availability engine", () => {
     }
   });
 
-  it("reopens the slot for the session being edited", () => {
+  it("reopens the slot for the booking being edited", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-29T12:00:00"));
     try {
-      const sessionStart = new Date("2026-03-30T10:00:00").getTime();
-      const sessionEnd = new Date("2026-03-30T13:00:00").getTime();
+      const bookingStart = new Date("2026-03-30T10:00:00").getTime();
+      const bookingEnd = new Date("2026-03-30T13:00:00").getTime();
 
       const blocks = buildClientWeekBlocks({
         baseAvailability: [
@@ -156,37 +168,39 @@ describe("availability engine", () => {
             sortKey: 1,
           }),
         ],
-        sessions: [
-          row("sessions", "session-1", {
-            startsAt: sessionStart,
-            guaranteedStartAt: sessionStart,
+        bookings: [
+          keyRow("bookings", "booking-1", {
+            startsAt: bookingStart,
+            endsAt: bookingEnd,
+          }),
+        ],
+        bookingBlocks: [],
+        savedBookings: [
+          row("savedBookings", "saved-booking-1", {
+            clientRef: { id: "client-1", collection: "clients", baseUrl: "http://localhost:5173" },
+            bookingRef: { id: "booking-1", collection: "bookings", baseUrl: "http://localhost:5173" },
+            status: "active",
+            startsAt: bookingStart,
+            endsAt: bookingEnd,
+            guaranteedStartAt: bookingStart,
             earliestStartAt: undefined,
             durationMinutes: 180,
-            status: "confirmed",
             bookedByRole: "client",
             slotLabel: "Mon, Mar 30 · 10:00 AM",
           }),
         ],
-        publicBusyWindows: [
-          row("publicBusyWindows", "busy-1", {
-            startsAt: sessionStart,
-            endsAt: sessionEnd,
-            kind: "session",
-            originRef: "session-1",
-            label: "Mon, Mar 30 · 10:00 AM",
-          }),
-        ],
         client: row("clients", "client-1", {
           fullName: "A",
+          providerViewerLink: "http://localhost/invite",
           status: "active",
           minimumDurationMinutes: 180,
           travelTimeMinutes: 0,
         }),
         horizonDays: 2,
-        excludeSessionId: "session-1",
+        excludeBookingId: "booking-1",
       });
 
-      const editableSlot = findSlotContainingTime(blocks, sessionStart, 180);
+      const editableSlot = findSlotContainingTime(blocks, bookingStart, 180);
 
       expect(editableSlot?.state).toBe("available");
       expect(editableSlot?.dayKey).toBe("2026-03-30");
@@ -233,7 +247,7 @@ describe("availability engine", () => {
     expect(found?.id).toBe("block-1");
   });
 
-  it("finds the bookable slot containing an existing session time", () => {
+  it("finds the bookable slot containing an existing booking time", () => {
     const startAt = new Date("2026-04-06T10:00:00").getTime();
     const block = {
       id: "block-1",

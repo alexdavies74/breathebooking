@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { UseSessionResult } from "@vennbase/react";
 import { useAcceptInviteFromUrl } from "@vennbase/react";
-import { buildClientHomePath } from "../lib/clientAccess";
+import { buildClientHomePath, saveClientAccess } from "../lib/clientAccess";
 import { db } from "../lib/db";
 
 interface InviteRouteProps {
@@ -18,14 +18,18 @@ export function InviteRoute({ session }: InviteRouteProps) {
 
   const accept = useAcceptInviteFromUrl(db, {
     enabled: Boolean(session.session?.signedIn && clientId),
-    onOpen: async (provider) => {
-      navigate(
-        buildClientHomePath({
-          clientId: clientId!,
-          providerId: provider.id,
-          providerBaseUrl: provider.ref.baseUrl,
-        }),
-      );
+    onOpen: async (client) => {
+      if (client.collection !== "clients") {
+        throw new Error(`Expected clients row, got ${client.collection}`);
+      }
+
+      await saveClientAccess({
+        clientId: client.id,
+        clientBaseUrl: client.ref.baseUrl,
+        clientName: client.fields.fullName,
+        providerName: providerName ?? "Your provider",
+      });
+      navigate(buildClientHomePath({ clientId: client.id }));
     },
   });
 
@@ -39,7 +43,7 @@ export function InviteRoute({ session }: InviteRouteProps) {
     }
 
     if (accept.status === "loading") {
-      return "Opening your shared booking workspace…";
+      return "Opening your private booking workspace…";
     }
 
     if (accept.status === "error") {

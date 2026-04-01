@@ -1,17 +1,17 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderDashboardRoute } from "./ProviderDashboardRoute";
 import { ProviderClientSettingsRoute } from "./ProviderClientSettingsRoute";
 import { toDayKey } from "../domain/date";
 
 const mocks = vi.hoisted(() => ({
   useCurrentUser: vi.fn(),
-  useParents: vi.fn(),
   useQuery: vi.fn(),
   useRow: vi.fn(),
   useSavedRow: vi.fn(),
+  useShareLink: vi.fn(),
   buildProviderWeekBlocks: vi.fn(() => []),
   createClient: vi.fn(),
   createPractice: vi.fn(),
@@ -19,35 +19,18 @@ const mocks = vi.hoisted(() => ({
   createPersonalBlock: vi.fn(),
   deactivateBaseAvailabilityWindow: vi.fn(),
   deactivatePersonalBlock: vi.fn(),
+  getBookingRootRef: vi.fn(),
   updateBaseAvailabilityWindow: vi.fn(),
   updateClientSettings: vi.fn(),
   updatePersonalBlock: vi.fn(),
 }));
 
-const {
-  useCurrentUser,
-  useParents,
-  useQuery,
-  useRow,
-  useSavedRow,
-  buildProviderWeekBlocks,
-  createClient,
-  createPractice,
-  createBaseAvailabilityWindow,
-  createPersonalBlock,
-  deactivateBaseAvailabilityWindow,
-  deactivatePersonalBlock,
-  updateBaseAvailabilityWindow,
-  updateClientSettings,
-  updatePersonalBlock,
-} = mocks;
-
 vi.mock("@vennbase/react", () => ({
   useCurrentUser: (...args: unknown[]) => mocks.useCurrentUser(...args),
-  useParents: (...args: unknown[]) => mocks.useParents(...args),
   useQuery: (...args: unknown[]) => mocks.useQuery(...args),
   useRow: (...args: unknown[]) => mocks.useRow(...args),
   useSavedRow: (...args: unknown[]) => mocks.useSavedRow(...args),
+  useShareLink: (...args: unknown[]) => mocks.useShareLink(...args),
 }));
 
 vi.mock("../domain/actions", () => ({
@@ -57,6 +40,7 @@ vi.mock("../domain/actions", () => ({
   createPractice: (...args: unknown[]) => mocks.createPractice(...args),
   deactivateBaseAvailabilityWindow: (...args: unknown[]) => mocks.deactivateBaseAvailabilityWindow(...args),
   deactivatePersonalBlock: (...args: unknown[]) => mocks.deactivatePersonalBlock(...args),
+  getBookingRootRef: (...args: unknown[]) => mocks.getBookingRootRef(...args),
   updateBaseAvailabilityWindow: (...args: unknown[]) => mocks.updateBaseAvailabilityWindow(...args),
   updateClientSettings: (...args: unknown[]) => mocks.updateClientSettings(...args),
   updatePersonalBlock: (...args: unknown[]) => mocks.updatePersonalBlock(...args),
@@ -73,10 +57,7 @@ vi.mock("../domain/calendarSync", () => ({
 }));
 
 vi.mock("../lib/db", () => ({
-  db: {
-    createInviteToken: vi.fn(() => ({ value: { token: "invite-token" } })),
-    createShareLink: vi.fn(() => "http://localhost/share?token=invite-token"),
-  },
+  db: {},
 }));
 
 vi.mock("qrcode", () => ({
@@ -101,6 +82,19 @@ function createProviderRow() {
       timezone: "America/Los_Angeles",
       ownerUsername: "owner",
       defaultWeekHorizon: 4,
+      bookingSubmitterLink: "http://localhost/join-bookings",
+      privateRootRef: { id: "private-root-1", collection: "providerPrivateRoots", baseUrl: "http://localhost" },
+    },
+  };
+}
+
+function createPrivateRootRow() {
+  return {
+    id: "private-root-1",
+    ref: { id: "private-root-1", collection: "providerPrivateRoots", baseUrl: "http://localhost" },
+    fields: {
+      providerRef: { id: "provider-1", collection: "providers", baseUrl: "http://localhost" },
+      createdAt: Date.now(),
     },
   };
 }
@@ -111,6 +105,7 @@ function createClientRow() {
     ref: { id: "client-1", collection: "clients", baseUrl: "http://localhost" },
     fields: {
       fullName: "Casey Client",
+      providerViewerLink: "http://localhost/open-provider",
       status: "active",
       minimumDurationMinutes: 180,
       travelTimeMinutes: 30,
@@ -139,18 +134,36 @@ function setCanvasRect(container: HTMLElement) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useCurrentUser.mockReturnValue({ data: { username: "owner" } });
-  useSavedRow.mockReturnValue({ data: createProviderRow(), save: vi.fn() });
-  useParents.mockReturnValue({ data: [{ id: "provider-1", collection: "providers", baseUrl: "http://localhost" }] });
-  useRow.mockReturnValue({ data: createClientRow() });
-  useQuery.mockImplementation((_db: unknown, collection: string) => {
-    if (collection === "clients") {
-      return { rows: [createClientRow()] };
+  const provider = createProviderRow();
+  const privateRoot = createPrivateRootRow();
+
+  mocks.useCurrentUser.mockReturnValue({ data: { username: "owner" } });
+  mocks.useSavedRow.mockReturnValue({ data: provider, save: vi.fn(), status: "success" });
+  mocks.useShareLink.mockReturnValue({ shareLink: "http://localhost/share?token=invite-token", status: "success" });
+  mocks.useRow.mockImplementation((_db: unknown, ref: { collection: string } | null | undefined) => {
+    if (!ref) {
+      return { data: null, status: "success" };
     }
 
-    return { rows: [] };
+    if (ref.collection === "providerPrivateRoots") {
+      return { data: privateRoot, status: "success" };
+    }
+
+    return { data: null, status: "success" };
   });
-  createClient.mockResolvedValue({
+  mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
+    if (collection === "clients") {
+      return { rows: [createClientRow()], status: "success" };
+    }
+
+    return { rows: [], status: "success" };
+  });
+  mocks.getBookingRootRef.mockReturnValue({
+    id: "booking-root-1",
+    collection: "bookingRoots",
+    baseUrl: "http://localhost",
+  });
+  mocks.createClient.mockResolvedValue({
     client: createClientRow(),
     inviteLink: "http://localhost/invite?clientId=client-1",
   });
@@ -160,7 +173,7 @@ describe("provider routes", () => {
   it("creates a client from name only and links to client settings", async () => {
     const user = userEvent.setup();
     const provider = createProviderRow();
-    useSavedRow.mockReturnValue({ data: provider, save: vi.fn() });
+    mocks.useSavedRow.mockReturnValue({ data: provider, save: vi.fn(), status: "success" });
 
     render(
       <MemoryRouter initialEntries={["/provider"]}>
@@ -174,12 +187,12 @@ describe("provider routes", () => {
     await user.type(screen.getByLabelText("Name"), "Casey Client");
     await user.click(screen.getByRole("button", { name: "Create client" }));
 
-    expect(createClient).toHaveBeenCalledWith(provider, { fullName: "Casey Client" });
+    expect(mocks.createClient).toHaveBeenCalledWith(provider, { fullName: "Casey Client" });
     expect(await screen.findByText("Client settings route")).toBeInTheDocument();
   });
 
   it("denies access to client settings for non-owners", () => {
-    useCurrentUser.mockReturnValue({ data: { username: "someone-else" } });
+    mocks.useCurrentUser.mockReturnValue({ data: { username: "someone-else" } });
 
     render(
       <MemoryRouter initialEntries={["/provider/clients/client-1/settings"]}>
@@ -193,21 +206,7 @@ describe("provider routes", () => {
     expect(screen.queryByRole("button", { name: "Save settings" })).not.toBeInTheDocument();
   });
 
-  it("allows client settings when parent lookup is empty but the client is in the provider roster", () => {
-    useParents.mockReturnValue({ data: [] });
-
-    render(
-      <MemoryRouter initialEntries={["/provider/clients/client-1/settings"]}>
-        <Routes>
-          <Route path="/provider/clients/:clientId/settings" element={<ProviderClientSettingsRoute session={createSession() as never} />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByRole("button", { name: "Save settings" })).toBeInTheDocument();
-  });
-
-  it("shows the invite link and QR on the client settings page", async () => {
+  it("shows the client invite link and QR on the client settings page", async () => {
     render(
       <MemoryRouter initialEntries={["/provider/clients/client-1/settings"]}>
         <Routes>
@@ -228,7 +227,7 @@ describe("provider routes", () => {
     const user = userEvent.setup();
     const dayKey = toDayKey(Date.now());
 
-    buildProviderWeekBlocks.mockReturnValue([
+    mocks.buildProviderWeekBlocks.mockReturnValue([
       {
         id: "availability-1",
         dayKey,
@@ -242,9 +241,9 @@ describe("provider routes", () => {
         weekday: new Date(`${dayKey}T00:00:00`).getDay(),
       },
     ] as never);
-    useQuery.mockImplementation((_db: unknown, collection: string) => {
+    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
       if (collection === "clients") {
-        return { rows: [createClientRow()] };
+        return { rows: [createClientRow()], status: "success" };
       }
 
       if (collection === "baseAvailabilityWindows") {
@@ -252,19 +251,23 @@ describe("provider routes", () => {
           rows: [
             {
               id: "window-1",
+              ref: { id: "window-1", collection: "baseAvailabilityWindows", baseUrl: "http://localhost" },
               fields: {
                 weekday: new Date(`${dayKey}T00:00:00`).getDay(),
                 startMinutes: 9 * 60,
                 endMinutes: 13 * 60,
+                status: "active",
+                sortKey: 1,
               },
             },
           ],
+          status: "success",
         };
       }
 
-      return { rows: [] };
+      return { rows: [], status: "success" };
     });
-    updateBaseAvailabilityWindow.mockResolvedValue({});
+    mocks.updateBaseAvailabilityWindow.mockResolvedValue({});
 
     const { container } = render(
       <MemoryRouter initialEntries={["/provider"]}>
@@ -286,7 +289,7 @@ describe("provider routes", () => {
 
     await user.click(screen.getByRole("button", { name: "Save range" }));
 
-    expect(updateBaseAvailabilityWindow).toHaveBeenCalledWith(
+    expect(mocks.updateBaseAvailabilityWindow).toHaveBeenCalledWith(
       expect.objectContaining({ id: "window-1" }),
       expect.objectContaining({ startMinutes: 10 * 60, endMinutes: 14 * 60 }),
     );

@@ -1,18 +1,24 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientHomeRoute } from "./ClientHomeRoute";
 import { formatDayLabel, formatTime } from "../domain/date";
 
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
   useRow: vi.fn(),
-  createSessionBooking: vi.fn(),
-  updateSessionBooking: vi.fn(),
-  cancelSession: vi.fn(),
+  createBooking: vi.fn(),
+  updateBooking: vi.fn(),
+  cancelBooking: vi.fn(),
   findSavedClientAccess: vi.fn(),
   saveClientAccess: vi.fn(),
+  acceptInvite: vi.fn(),
+  joinInvite: vi.fn(),
+}));
+
+vi.mock("@vennbase/core", () => ({
+  CURRENT_USER: { __vennbase: "CURRENT_USER" },
 }));
 
 vi.mock("@vennbase/react", () => ({
@@ -21,9 +27,9 @@ vi.mock("@vennbase/react", () => ({
 }));
 
 vi.mock("../domain/actions", () => ({
-  createSessionBooking: (...args: unknown[]) => mocks.createSessionBooking(...args),
-  updateSessionBooking: (...args: unknown[]) => mocks.updateSessionBooking(...args),
-  cancelSession: (...args: unknown[]) => mocks.cancelSession(...args),
+  createBooking: (...args: unknown[]) => mocks.createBooking(...args),
+  updateBooking: (...args: unknown[]) => mocks.updateBooking(...args),
+  cancelBooking: (...args: unknown[]) => mocks.cancelBooking(...args),
 }));
 
 vi.mock("../lib/clientAccess", async () => {
@@ -36,7 +42,10 @@ vi.mock("../lib/clientAccess", async () => {
 });
 
 vi.mock("../lib/db", () => ({
-  db: {},
+  db: {
+    acceptInvite: (...args: unknown[]) => mocks.acceptInvite(...args),
+    joinInvite: (...args: unknown[]) => mocks.joinInvite(...args),
+  },
 }));
 
 function createSession() {
@@ -46,19 +55,18 @@ function createSession() {
   };
 }
 
-function escapeForRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function createProviderRow() {
   return {
     id: "provider-1",
+    collection: "providers",
     ref: { id: "provider-1", collection: "providers", baseUrl: "http://localhost" },
     fields: {
       displayName: "Provider Practice",
       timezone: "America/Los_Angeles",
       ownerUsername: "owner",
       defaultWeekHorizon: 4,
+      bookingSubmitterLink: "http://localhost/join-bookings",
+      privateRootRef: { id: "private-root-1", collection: "providerPrivateRoots", baseUrl: "http://localhost" },
     },
   };
 }
@@ -66,9 +74,11 @@ function createProviderRow() {
 function createClientRow() {
   return {
     id: "client-1",
+    collection: "clients",
     ref: { id: "client-1", collection: "clients", baseUrl: "http://localhost" },
     fields: {
       fullName: "Casey Client",
+      providerViewerLink: "http://localhost/open-provider",
       status: "active",
       minimumDurationMinutes: 180,
       travelTimeMinutes: 30,
@@ -90,52 +100,62 @@ function createAvailabilityRow(id: string, weekday: number, startMinutes: number
   };
 }
 
-function createSessionRow(id: string, guaranteedStartAt: number) {
+function createSavedBookingRow(id: string, guaranteedStartAt: number) {
   return {
-    id,
-    ref: { id, collection: "sessions", baseUrl: "http://localhost" },
+    id: `saved-${id}`,
+    ref: { id: `saved-${id}`, collection: "savedBookings", baseUrl: "http://localhost" },
     fields: {
+      clientRef: { id: "client-1", collection: "clients", baseUrl: "http://localhost" },
+      bookingRef: { id, collection: "bookings", baseUrl: "http://localhost" },
+      status: "active",
       startsAt: guaranteedStartAt,
+      endsAt: guaranteedStartAt + 180 * 60 * 1000,
       guaranteedStartAt,
       earliestStartAt: undefined,
       durationMinutes: 180,
-      status: "confirmed",
       bookedByRole: "client",
       slotLabel: `${formatDayLabel(guaranteedStartAt)} · ${formatTime(guaranteedStartAt)}`,
     },
   };
 }
 
-function setCanvasRect(container: HTMLElement) {
-  container.querySelectorAll(".day-column__canvas").forEach((canvas) => {
-    Object.defineProperty(canvas, "getBoundingClientRect", {
-      configurable: true,
-      value: () => ({
-        top: 0,
-        left: 0,
-        right: 180,
-        bottom: 720,
-        width: 180,
-        height: 720,
-        x: 0,
-        y: 0,
-        toJSON: () => ({}),
-      }),
-    });
-  });
+function createBookingKeyRow(id: string, startsAt: number, endsAt: number) {
+  return {
+    id,
+    collection: "bookings",
+    fields: {
+      startsAt,
+      endsAt,
+    },
+  };
 }
 
 describe("ClientHomeRoute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.findSavedClientAccess.mockResolvedValue(null);
-    mocks.saveClientAccess.mockResolvedValue([]);
     const provider = createProviderRow();
     const client = createClientRow();
 
+    mocks.findSavedClientAccess.mockResolvedValue({
+      clientId: "client-1",
+      clientBaseUrl: "http://localhost",
+      clientName: "Casey Client",
+      providerName: "Provider Practice",
+      lastOpenedAt: new Date("2026-03-29T12:00:00Z").getTime(),
+    });
+    mocks.saveClientAccess.mockResolvedValue([]);
+    mocks.acceptInvite.mockResolvedValue(provider);
+    mocks.joinInvite.mockResolvedValue({
+      ref: { id: "booking-root-1", collection: "bookingRoots", baseUrl: "http://localhost" },
+      role: "submitter",
+    });
     mocks.useRow.mockImplementation((_db: unknown, ref: { collection: string } | null | undefined) => {
       if (!ref) {
         return { data: null };
+      }
+
+      if (ref.collection === "clients") {
+        return { data: client };
       }
 
       if (ref.collection === "providers") {
@@ -145,12 +165,6 @@ describe("ClientHomeRoute", () => {
       return { data: null };
     });
     mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
-      if (collection === "clients") {
-        return {
-          rows: [client],
-        };
-      }
-
       if (collection === "baseAvailabilityWindows") {
         return {
           rows: [1, 2, 3, 4, 5].flatMap((weekday) => [
@@ -160,53 +174,35 @@ describe("ClientHomeRoute", () => {
         };
       }
 
+      if (collection === "bookings") {
+        return {
+          rows: [],
+        };
+      }
+
+      if (collection === "bookingBlocks") {
+        return {
+          rows: [],
+        };
+      }
+
+      if (collection === "savedBookings") {
+        return {
+          rows: [],
+        };
+      }
+
+      if (collection === "rebookingPresets") {
+        return {
+          rows: [],
+        };
+      }
+
       return { rows: [] };
     });
   });
 
-  it("renders provider availability when travel and minimum fit within 5h windows", () => {
-    render(
-      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
-        <Routes>
-          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    expect(screen.getAllByText("Mon, Mar 30 open")).toHaveLength(2);
-    expect(screen.getAllByText(/open$/).length).toBeGreaterThan(0);
-  });
-
-  it("persists the resolved client workspace for future root visits", async () => {
-    render(
-      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
-        <Routes>
-          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    await screen.findAllByText("Mon, Mar 30 open");
-
-    expect(mocks.saveClientAccess).toHaveBeenCalledWith({
-      clientId: "client-1",
-      clientName: "Casey Client",
-      providerId: "provider-1",
-      providerName: "Provider Practice",
-      providerBaseUrl: "http://localhost",
-    });
-  });
-
-  it("opens a saved client workspace even when the query params are missing", async () => {
-    mocks.findSavedClientAccess.mockResolvedValue({
-      clientId: "client-1",
-      clientName: "Casey Client",
-      providerId: "provider-1",
-      providerName: "Provider Practice",
-      providerBaseUrl: "https://api.puter.com",
-      lastOpenedAt: new Date("2026-03-29T12:00:00Z").getTime(),
-    });
-
+  it("opens the client row, then joins the provider viewer link and booking inbox, without querying provider clients", async () => {
     render(
       <MemoryRouter initialEntries={["/client/client-1"]}>
         <Routes>
@@ -215,41 +211,75 @@ describe("ClientHomeRoute", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findAllByText("Mon, Mar 30 open")).toHaveLength(2);
-    expect(mocks.findSavedClientAccess).toHaveBeenCalledWith("client-1");
+    expect(await screen.findAllByText(/open$/)).not.toHaveLength(0);
+    await waitFor(() => {
+      expect(mocks.joinInvite).toHaveBeenCalledWith("http://localhost/join-bookings");
+    });
+    expect(mocks.acceptInvite).toHaveBeenCalledWith("http://localhost/open-provider");
+    expect(mocks.useQuery.mock.calls.map((call) => call[1])).not.toContain("clients");
   });
 
-  it("confirms bookings from the planner instead of showing duplicate range sliders", async () => {
-    const user = userEvent.setup();
-    mocks.createSessionBooking.mockResolvedValue({});
-
+  it("uses key-only booking and block queries and persists resolved client access", async () => {
     render(
-      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+      <MemoryRouter initialEntries={["/client/client-1"]}>
         <Routes>
           <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
         </Routes>
       </MemoryRouter>,
     );
 
-    await user.click(screen.getAllByText("Mon, Mar 30 open")[0]);
+    await screen.findAllByText(/open$/);
+    await waitFor(() => {
+      expect(
+        mocks.useQuery.mock.calls.find(([, collection, options]) => collection === "bookings" && options?.select === "keys"),
+      ).toBeTruthy();
+      expect(
+        mocks.useQuery.mock.calls.find(([, collection, options]) => collection === "bookingBlocks" && options?.select === "keys"),
+      ).toBeTruthy();
+    });
 
-    expect(screen.queryByLabelText("Start")).toBeNull();
-    expect(screen.queryByLabelText("End")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Save booking" }));
-
-    expect(mocks.createSessionBooking).toHaveBeenCalledTimes(1);
+    expect(mocks.saveClientAccess).toHaveBeenCalledWith({
+      clientId: "client-1",
+      clientBaseUrl: "http://localhost",
+      clientName: "Casey Client",
+      providerName: "Provider Practice",
+    });
   });
 
-  it("suggests rebooking one week later instead of the same date", () => {
-    const latestStartAt = new Date("2026-03-30T14:00:00").getTime();
-    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
-      if (collection === "clients") {
-        return {
-          rows: [createClientRow()],
-        };
-      }
+  it("creates a booking under the booking root instead of writing under the provider", async () => {
+    const user = userEvent.setup();
+    mocks.createBooking.mockResolvedValue({});
 
+    const { container } = render(
+      <MemoryRouter initialEntries={["/client/client-1"]}>
+        <Routes>
+          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByText(/open$/);
+    fireEvent.click(container.querySelector(".week-block--available") as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Save booking" }));
+
+    expect(mocks.createBooking).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookingRootRef: { id: "booking-root-1", collection: "bookingRoots", baseUrl: "http://localhost" },
+        client: expect.objectContaining({ id: "client-1" }),
+        bookedByRole: "client",
+      }),
+    );
+  });
+
+  it("updates and cancels only the current user's saved booking", async () => {
+    const user = userEvent.setup();
+    const bookingDay = new Date();
+    bookingDay.setHours(14, 0, 0, 0);
+    bookingDay.setDate(bookingDay.getDate() + 1);
+    const bookingStartAt = bookingDay.getTime();
+    mocks.updateBooking.mockResolvedValue({});
+    mocks.cancelBooking.mockResolvedValue({});
+    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
       if (collection === "baseAvailabilityWindows") {
         return {
           rows: [1, 2, 3, 4, 5].flatMap((weekday) => [
@@ -259,207 +289,65 @@ describe("ClientHomeRoute", () => {
         };
       }
 
-      if (collection === "sessions") {
+      if (collection === "bookings") {
         return {
-          rows: [createSessionRow("session-1", latestStartAt)],
+          rows: [createBookingKeyRow("booking-1", bookingStartAt, bookingStartAt + 180 * 60 * 1000)],
         };
       }
 
-      return { rows: [] };
-    });
-
-    render(
-      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
-        <Routes>
-          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    const suggestedStartAt = new Date("2026-04-06T14:00:00").getTime();
-    expect(
-      screen.getByText(
-        `Book ${new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(suggestedStartAt)} ${formatTime(
-          suggestedStartAt,
-        )} again on ${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(suggestedStartAt)}?`,
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("books the matching slot one week later from the recommendation card", async () => {
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-29T12:00:00").getTime());
-    try {
-      const user = userEvent.setup();
-      mocks.createSessionBooking.mockResolvedValue({});
-      const latestStartAt = new Date("2026-03-30T14:00:00").getTime();
-
-      mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
-        if (collection === "clients") {
-          return {
-            rows: [createClientRow()],
-          };
-        }
-
-        if (collection === "baseAvailabilityWindows") {
-          return {
-            rows: [1, 2, 3, 4, 5].flatMap((weekday) => [
-              createAvailabilityRow(`window-${weekday}-am`, weekday, 8 * 60),
-              createAvailabilityRow(`window-${weekday}-pm`, weekday, 14 * 60),
-            ]),
-          };
-        }
-
-        if (collection === "sessions") {
-          return {
-            rows: [createSessionRow("session-1", latestStartAt)],
-          };
-        }
-
+      if (collection === "bookingBlocks") {
         return { rows: [] };
-      });
+      }
 
-      render(
-        <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
-          <Routes>
-            <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
-          </Routes>
-        </MemoryRouter>,
-      );
-
-      await user.click(screen.getByRole("button", { name: "Book it" }));
-
-      expect(mocks.createSessionBooking).toHaveBeenCalledWith(
-        expect.objectContaining({
-          draft: expect.objectContaining({
-            guaranteedStartAt: new Date("2026-04-06T14:00:00").getTime(),
-          }),
-        }),
-      );
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-  });
-
-  it("saves edits to an existing session from the client planner", async () => {
-    const user = userEvent.setup();
-    mocks.updateSessionBooking.mockResolvedValue({});
-    const sessionStartAt = new Date("2026-03-30T10:00:00").getTime();
-
-    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
-      if (collection === "clients") {
+      if (collection === "savedBookings") {
         return {
-          rows: [createClientRow()],
+          rows: [createSavedBookingRow("booking-1", bookingStartAt)],
         };
       }
 
-      if (collection === "baseAvailabilityWindows") {
-        return {
-          rows: [createAvailabilityRow("window-1", 1, 8 * 60)],
-        };
-      }
-
-      if (collection === "sessions") {
-        return {
-          rows: [createSessionRow("session-1", sessionStartAt)],
-        };
-      }
-
-      if (collection === "publicBusyWindows") {
-        return {
-          rows: [
-            {
-              id: "busy-1",
-              ref: { id: "busy-1", collection: "publicBusyWindows", baseUrl: "http://localhost" },
-              fields: {
-                startsAt: sessionStartAt,
-                endsAt: sessionStartAt + 180 * 60 * 1000,
-                kind: "session",
-                originRef: "session-1",
-                label: `${formatDayLabel(sessionStartAt)} · ${formatTime(sessionStartAt)}`,
-              },
-            },
-          ],
-        };
+      if (collection === "rebookingPresets") {
+        return { rows: [] };
       }
 
       return { rows: [] };
     });
 
     const { container } = render(
-      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
+      <MemoryRouter initialEntries={["/client/client-1"]}>
         <Routes>
           <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
         </Routes>
       </MemoryRouter>,
     );
 
-    setCanvasRect(container);
-
-    const sessionLabel = `${formatDayLabel(sessionStartAt)} · ${formatTime(sessionStartAt)}`;
-    await user.click(screen.getByRole("button", { name: new RegExp(escapeForRegExp(sessionLabel)) }));
-
-    expect(screen.getByRole("button", { name: "Save booking" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete booking" })).toBeInTheDocument();
-
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Move booking" }), { clientY: 240 });
-    fireEvent.pointerMove(window, { clientY: 225 });
-    fireEvent.pointerUp(window);
-
+    await waitFor(() => {
+      expect(container.querySelector(".week-block--booked-own")).toBeTruthy();
+    });
+    fireEvent.click(container.querySelector(".week-block--booked-own") as HTMLElement);
+    fireEvent.click(container.querySelector(".week-block--available") as HTMLElement);
     await user.click(screen.getByRole("button", { name: "Save booking" }));
 
-    expect(mocks.updateSessionBooking).toHaveBeenCalledWith(
+    expect(mocks.updateBooking).toHaveBeenCalledWith(
       expect.objectContaining({
-        session: expect.objectContaining({ id: "session-1" }),
-        draft: expect.objectContaining({
-          guaranteedStartAt: sessionStartAt - 30 * 60 * 1000,
-          durationMinutes: 180,
+        bookingRootRef: { id: "booking-root-1", collection: "bookingRoots", baseUrl: "http://localhost" },
+        savedBooking: expect.objectContaining({
+          fields: expect.objectContaining({
+            bookingRef: expect.objectContaining({ id: "booking-1" }),
+          }),
         }),
       }),
     );
-  });
 
-  it("cancels a selected session from edit mode", async () => {
-    const user = userEvent.setup();
-    mocks.cancelSession.mockResolvedValue({});
-    const sessionStartAt = new Date("2026-03-30T10:00:00").getTime();
+    fireEvent.click(container.querySelector(".week-block--booked-own") as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Cancel booking" }));
 
-    mocks.useQuery.mockImplementation((_db: unknown, collection: string) => {
-      if (collection === "clients") {
-        return {
-          rows: [createClientRow()],
-        };
-      }
-
-      if (collection === "baseAvailabilityWindows") {
-        return {
-          rows: [createAvailabilityRow("window-1", 1, 8 * 60)],
-        };
-      }
-
-      if (collection === "sessions") {
-        return {
-          rows: [createSessionRow("session-1", sessionStartAt)],
-        };
-      }
-
-      return { rows: [] };
+    expect(mocks.cancelBooking).toHaveBeenCalledWith({
+      bookingRootRef: { id: "booking-root-1", collection: "bookingRoots", baseUrl: "http://localhost" },
+      savedBooking: expect.objectContaining({
+        fields: expect.objectContaining({
+          bookingRef: expect.objectContaining({ id: "booking-1" }),
+        }),
+      }),
     });
-
-    render(
-      <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
-        <Routes>
-          <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    const sessionLabel = `${formatDayLabel(sessionStartAt)} · ${formatTime(sessionStartAt)}`;
-    await user.click(screen.getByRole("button", { name: new RegExp(escapeForRegExp(sessionLabel)) }));
-    await user.click(screen.getByRole("button", { name: "Cancel session" }));
-
-    expect(mocks.cancelSession).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "provider-1" }),
-      expect.objectContaining({ id: "session-1" }),
-    );
   });
 });

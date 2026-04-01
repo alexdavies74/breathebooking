@@ -1,4 +1,4 @@
-import type { RowHandle } from "@vennbase/core";
+import { CURRENT_USER, type RowHandle, type RowRef } from "@vennbase/core";
 import { db } from "../lib/db";
 import { buildClientInviteLink } from "../lib/clientInvite";
 import type { Schema } from "../lib/schema";
@@ -6,9 +6,12 @@ import { formatDayLabel, formatTime, minutesFromTimestamp, weekdayFromTimestamp 
 import type { BookingDraft } from "./types";
 
 type ProviderRow = RowHandle<Schema, "providers">;
+type ProviderPrivateRootRow = RowHandle<Schema, "providerPrivateRoots">;
 type ClientRow = RowHandle<Schema, "clients">;
-type SessionRow = RowHandle<Schema, "sessions">;
+type BookingRow = RowHandle<Schema, "bookings">;
+type SavedBookingRow = RowHandle<Schema, "savedBookings">;
 type BlockRow = RowHandle<Schema, "personalBlocks">;
+type BookingBlockRow = RowHandle<Schema, "bookingBlocks">;
 type BaseAvailabilityRow = RowHandle<Schema, "baseAvailabilityWindows">;
 
 export interface CreateClientInput {
@@ -33,6 +36,102 @@ const DEFAULT_PROVIDER_WINDOWS = [
   { weekday: 5, startMinutes: 14 * 60, endMinutes: 19 * 60, status: "active", sortKey: 5140 },
 ];
 
+function bookingRootRefFromProvider(provider: ProviderRow): RowRef<"bookingRoots"> {
+  const link = provider.fields.bookingSubmitterLink;
+  if (!link) {
+    throw new Error("Provider is missing a booking root link.");
+  }
+
+  const parsed = db.parseInvite(link);
+  if (parsed.ref.collection !== "bookingRoots") {
+    throw new Error(`Expected bookingRoots ref, got ${parsed.ref.collection}`);
+  }
+
+  return parsed.ref as RowRef<"bookingRoots">;
+}
+
+async function fetchProviderPrivateRoot(provider: ProviderRow): Promise<ProviderPrivateRootRow> {
+  const privateRootRef = provider.fields.privateRootRef;
+  if (!privateRootRef) {
+    throw new Error("Provider is missing a private root.");
+  }
+
+  const privateRoot = await db.getRow(privateRootRef);
+  if (privateRoot.collection !== "providerPrivateRoots") {
+    throw new Error(`Expected providerPrivateRoots row, got ${privateRoot.collection}`);
+  }
+
+  return privateRoot as ProviderPrivateRootRow;
+}
+
+async function assertBookingSlotAvailable(args: {
+  bookingRootRef: RowRef<"bookingRoots">;
+  startsAt: number;
+  endsAt: number;
+  excludeBookingId?: string;
+}) {
+  const existing = await db.query("bookings", {
+    in: args.bookingRootRef,
+    where: {
+      startsAt: args.startsAt,
+      endsAt: args.endsAt,
+    },
+    select: "keys",
+    limit: 10,
+  });
+
+  if (existing.some((row) => row.id !== args.excludeBookingId)) {
+    throw new Error("This slot is no longer available.");
+  }
+}
+
+function createSavedBookingFields(args: {
+  client: ClientRow;
+  booking: BookingDraft;
+  bookedByRole: "provider" | "client";
+  slotLabel: string;
+  bookingRef: RowRef<"bookings">;
+}) {
+  return {
+    clientRef: args.client.ref,
+    bookingRef: args.bookingRef,
+    status: "active",
+    startsAt: args.booking.startsAt,
+    endsAt: args.booking.endsAt,
+    guaranteedStartAt: args.booking.guaranteedStartAt,
+    earliestStartAt: args.booking.earliestStartAt,
+    durationMinutes: args.booking.durationMinutes,
+    bookedByRole: args.bookedByRole,
+    slotLabel: args.slotLabel,
+  };
+}
+
+async function recordPreset(client: ClientRow, booking: BookingDraft, slotLabel: string) {
+  await db
+    .create(
+      "rebookingPresets",
+      {
+        clientRef: client.ref,
+        weekday: weekdayFromTimestamp(booking.guaranteedStartAt),
+        startMinutes: minutesFromTimestamp(booking.guaranteedStartAt),
+        durationMinutes: booking.durationMinutes,
+        label: slotLabel,
+        lastUsedAt: Date.now(),
+      },
+      { in: CURRENT_USER },
+    )
+    .committed;
+}
+
+async function findBookingBlock(bookingRootRef: RowRef<"bookingRoots">, originRef: string) {
+  const rows = await db.query("bookingBlocks", {
+    in: bookingRootRef,
+    orderBy: "startsAt",
+    order: "asc",
+  });
+  return rows.find((row) => row.fields.originRef === originRef) ?? null;
+}
+
 export async function createPractice(displayName: string, timezone: string, ownerUsername: string) {
   const providerWrite = db.create("providers", {
     displayName,
@@ -40,176 +139,179 @@ export async function createPractice(displayName: string, timezone: string, owne
     ownerUsername,
     defaultWeekHorizon: 4,
   });
+  const provider = providerWrite.value;
+  await providerWrite.committed;
 
-  const provider = await providerWrite.committed;
+  const privateRootWrite = db.create("providerPrivateRoots", {
+    providerRef: provider.ref,
+    createdAt: Date.now(),
+  });
+  const privateRoot = privateRootWrite.value;
+  await privateRootWrite.committed;
+
+  const bookingRootWrite = db.create("bookingRoots", {
+    providerRef: provider.ref,
+    createdAt: Date.now(),
+  });
+  const bookingRoot = bookingRootWrite.value;
+  await bookingRootWrite.committed;
+
+  const bookingSubmitterLink = await db.createShareLink(bookingRoot.ref, "submitter").committed;
+  const committedProvider = await db
+    .update("providers", provider.ref, {
+      bookingSubmitterLink,
+      privateRootRef: privateRoot.ref,
+    })
+    .committed;
 
   await Promise.all(
     DEFAULT_PROVIDER_WINDOWS.map(async (window) => {
-      const availabilityWrite = db.create("baseAvailabilityWindows", window, { in: provider });
-      await availabilityWrite.committed;
+      await db.create("baseAvailabilityWindows", window, { in: committedProvider }).committed;
     }),
   );
 
-  return provider;
+  return committedProvider;
 }
 
 export async function createClient(provider: ProviderRow, input: CreateClientInput) {
-  const clientWrite = db.create(
-    "clients",
-    {
-      fullName: input.fullName,
-      status: "active",
-      minimumDurationMinutes: 180,
-      travelTimeMinutes: 30,
-    },
-    { in: provider },
-  );
-  const client = await clientWrite.committed;
+  const privateRoot = await fetchProviderPrivateRoot(provider);
+  const providerViewerLink = await db.createShareLink(provider.ref, "viewer").committed;
 
-  return { client, inviteLink: buildClientInviteLink(provider, client) };
+  const client = await db
+    .create(
+      "clients",
+      {
+        fullName: input.fullName,
+        providerViewerLink,
+        status: "active",
+        minimumDurationMinutes: 180,
+        travelTimeMinutes: 30,
+      },
+      { in: privateRoot },
+    )
+    .committed;
+
+  return {
+    client,
+    inviteLink: await buildClientInviteLink(provider, client),
+  };
 }
 
 export async function updateClientSettings(client: ClientRow, input: ClientSettingsInput) {
   return db
-    .update("clients", client, {
+    .update("clients", client.ref, {
       minimumDurationMinutes: input.minimumDurationMinutes,
       travelTimeMinutes: input.travelTimeMinutes,
     })
     .committed;
 }
 
-export async function createSessionBooking(args: {
-  provider: ProviderRow;
+export async function createBooking(args: {
+  bookingRootRef: RowRef<"bookingRoots">;
   client: ClientRow;
   draft: BookingDraft;
   bookedByRole: "provider" | "client";
 }) {
-  const sessionLabel = `${formatDayLabel(args.draft.guaranteedStartAt)} · ${formatTime(args.draft.guaranteedStartAt)}`;
-  const startsAt = args.draft.guaranteedStartAt;
-  const endsAt = args.draft.guaranteedStartAt + args.draft.durationMinutes * 60 * 1000;
+  const slotLabel = `${formatDayLabel(args.draft.guaranteedStartAt)} · ${formatTime(args.draft.guaranteedStartAt)}`;
 
-  const sessionWrite = db.create(
-    "sessions",
-    {
-      startsAt,
-      guaranteedStartAt: args.draft.guaranteedStartAt,
-      earliestStartAt: undefined,
-      durationMinutes: args.draft.durationMinutes,
-      status: "confirmed",
-      bookedByRole: args.bookedByRole,
-      slotLabel: sessionLabel,
-    },
-    { in: args.client },
-  );
-  const session = await sessionWrite.committed;
+  await assertBookingSlotAvailable({
+    bookingRootRef: args.bookingRootRef,
+    startsAt: args.draft.startsAt,
+    endsAt: args.draft.endsAt,
+  });
 
-  await db
+  const booking = await db
     .create(
-      "publicBusyWindows",
+      "bookings",
       {
-        startsAt,
-        endsAt,
-        kind: "session",
-        originRef: session.id,
-        label: sessionLabel,
-      },
-      { in: args.provider },
-    )
-    .committed;
-
-  await db
-    .create(
-      "rebookingPresets",
-      {
-        weekday: weekdayFromTimestamp(args.draft.guaranteedStartAt),
-        startMinutes: minutesFromTimestamp(args.draft.guaranteedStartAt),
+        clientRef: args.client.ref,
+        startsAt: args.draft.startsAt,
+        endsAt: args.draft.endsAt,
+        guaranteedStartAt: args.draft.guaranteedStartAt,
+        earliestStartAt: args.draft.earliestStartAt,
         durationMinutes: args.draft.durationMinutes,
-        label: sessionLabel,
-        lastUsedAt: Date.now(),
+        status: "confirmed",
+        bookedByRole: args.bookedByRole,
+        slotLabel,
       },
-      { in: args.client },
+      { in: args.bookingRootRef },
     )
     .committed;
 
-  return session;
-}
-
-export async function updateSessionBooking(args: {
-  provider: ProviderRow;
-  client: ClientRow;
-  session: SessionRow;
-  draft: BookingDraft;
-  bookedByRole: "provider" | "client";
-}) {
-  const sessionLabel = `${formatDayLabel(args.draft.guaranteedStartAt)} · ${formatTime(args.draft.guaranteedStartAt)}`;
-  const startsAt = args.draft.guaranteedStartAt;
-  const endsAt = args.draft.guaranteedStartAt + args.draft.durationMinutes * 60 * 1000;
-
-  const session = await db
-    .update("sessions", args.session, {
-      startsAt,
-      guaranteedStartAt: args.draft.guaranteedStartAt,
-      earliestStartAt: undefined,
-      durationMinutes: args.draft.durationMinutes,
-      status: "confirmed",
+  const savedBooking = await db
+    .create("savedBookings", createSavedBookingFields({
+      client: args.client,
+      booking: args.draft,
       bookedByRole: args.bookedByRole,
-      slotLabel: sessionLabel,
+      slotLabel,
+      bookingRef: booking.ref,
+    }), {
+      in: CURRENT_USER,
     })
     .committed;
 
-  const busyRow = await findProviderBusyWindow(args.provider, args.session.id, "session");
-  if (busyRow) {
-    await db
-      .update("publicBusyWindows", busyRow, {
-        startsAt,
-        endsAt,
-        label: sessionLabel,
-      })
-      .committed;
-  } else {
-    await db
-      .create(
-        "publicBusyWindows",
-        {
-          startsAt,
-          endsAt,
-          kind: "session",
-          originRef: args.session.id,
-          label: sessionLabel,
-        },
-        { in: args.provider },
-      )
-      .committed;
-  }
+  await recordPreset(args.client, args.draft, slotLabel);
 
-  await db
-    .create(
-      "rebookingPresets",
-      {
-        weekday: weekdayFromTimestamp(args.draft.guaranteedStartAt),
-        startMinutes: minutesFromTimestamp(args.draft.guaranteedStartAt),
-        durationMinutes: args.draft.durationMinutes,
-        label: sessionLabel,
-        lastUsedAt: Date.now(),
-      },
-      { in: args.client },
-    )
+  return { booking, savedBooking };
+}
+
+export async function updateBooking(args: {
+  bookingRootRef: RowRef<"bookingRoots">;
+  client: ClientRow;
+  savedBooking: SavedBookingRow;
+  draft: BookingDraft;
+  bookedByRole: "provider" | "client";
+}) {
+  const slotLabel = `${formatDayLabel(args.draft.guaranteedStartAt)} · ${formatTime(args.draft.guaranteedStartAt)}`;
+  const bookingId = args.savedBooking.fields.bookingRef.id;
+
+  await assertBookingSlotAvailable({
+    bookingRootRef: args.bookingRootRef,
+    startsAt: args.draft.startsAt,
+    endsAt: args.draft.endsAt,
+    excludeBookingId: bookingId,
+  });
+
+  const booking = await db
+    .update("bookings", args.savedBooking.fields.bookingRef, {
+      clientRef: args.client.ref,
+      startsAt: args.draft.startsAt,
+      endsAt: args.draft.endsAt,
+      guaranteedStartAt: args.draft.guaranteedStartAt,
+      earliestStartAt: args.draft.earliestStartAt,
+      durationMinutes: args.draft.durationMinutes,
+      status: "confirmed",
+      bookedByRole: args.bookedByRole,
+      slotLabel,
+    })
     .committed;
 
-  return session;
+  const savedBooking = await db
+    .update("savedBookings", args.savedBooking.ref, createSavedBookingFields({
+      client: args.client,
+      booking: args.draft,
+      bookedByRole: args.bookedByRole,
+      slotLabel,
+      bookingRef: booking.ref,
+    }))
+    .committed;
+
+  await recordPreset(args.client, args.draft, slotLabel);
+
+  return { booking, savedBooking };
 }
 
-async function findProviderBusyWindow(provider: ProviderRow, originRef: string, kind: "block" | "session") {
-  const busyRows = await db.query("publicBusyWindows", { in: provider, index: "byStart", order: "asc" });
-  return busyRows.find((row) => row.fields.originRef === originRef && row.fields.kind === kind);
-}
-
-export async function cancelSession(provider: ProviderRow, session: SessionRow) {
-  await db.update("sessions", session, { status: "canceled" }).committed;
-  const busyRow = await findProviderBusyWindow(provider, session.id, "session");
-  if (busyRow) {
-    await db.update("publicBusyWindows", busyRow, { kind: "inactive" }).committed;
+export async function cancelBooking(args: {
+  bookingRootRef: RowRef<"bookingRoots">;
+  savedBooking: SavedBookingRow;
+}) {
+  const booking = await db.getRow(args.savedBooking.fields.bookingRef);
+  if (booking.collection !== "bookings") {
+    throw new Error(`Expected bookings row, got ${booking.collection}`);
   }
+
+  await booking.in.remove(args.bookingRootRef).committed;
+  await db.update("savedBookings", args.savedBooking.ref, { status: "canceled" }).committed;
 }
 
 export async function createPersonalBlock(args: {
@@ -218,30 +320,34 @@ export async function createPersonalBlock(args: {
   endsAt: number;
   label?: string;
 }) {
+  const privateRoot = await fetchProviderPrivateRoot(args.provider);
+  const bookingRootRef = bookingRootRefFromProvider(args.provider);
   const label = args.label ?? "Personal block";
-  const blockWrite = db.create(
-    "personalBlocks",
-    {
-      startsAt: args.startsAt,
-      endsAt: args.endsAt,
-      source: "manual",
-      label,
-    },
-    { in: args.provider },
-  );
-  const block = await blockWrite.committed;
 
-  await db
+  const block = await db
     .create(
-      "publicBusyWindows",
+      "personalBlocks",
       {
         startsAt: args.startsAt,
         endsAt: args.endsAt,
-        kind: "block",
+        source: "manual",
+        label,
+      },
+      { in: privateRoot },
+    )
+    .committed;
+
+  await db
+    .create(
+      "bookingBlocks",
+      {
+        startsAt: args.startsAt,
+        endsAt: args.endsAt,
+        source: "manual",
         originRef: block.id,
         label,
       },
-      { in: args.provider },
+      { in: bookingRootRef },
     )
     .committed;
 
@@ -255,19 +361,21 @@ export async function updatePersonalBlock(args: {
   endsAt: number;
   label?: string;
 }) {
+  const bookingRootRef = bookingRootRefFromProvider(args.provider);
   const label = args.label ?? args.block.fields.label ?? "Personal block";
+
   const block = await db
-    .update("personalBlocks", args.block, {
+    .update("personalBlocks", args.block.ref, {
       startsAt: args.startsAt,
       endsAt: args.endsAt,
       label,
     })
     .committed;
 
-  const busyRow = await findProviderBusyWindow(args.provider, args.block.id, "block");
-  if (busyRow) {
+  const bookingBlock = await findBookingBlock(bookingRootRef, args.block.id);
+  if (bookingBlock) {
     await db
-      .update("publicBusyWindows", busyRow, {
+      .update("bookingBlocks", bookingBlock.ref, {
         startsAt: args.startsAt,
         endsAt: args.endsAt,
         label,
@@ -279,10 +387,12 @@ export async function updatePersonalBlock(args: {
 }
 
 export async function deactivatePersonalBlock(provider: ProviderRow, block: BlockRow) {
-  await db.update("personalBlocks", block, { source: "inactive" }).committed;
-  const busyRow = await findProviderBusyWindow(provider, block.id, "block");
-  if (busyRow) {
-    await db.update("publicBusyWindows", busyRow, { kind: "inactive" }).committed;
+  const bookingRootRef = bookingRootRefFromProvider(provider);
+  await db.update("personalBlocks", block.ref, { source: "inactive" }).committed;
+
+  const bookingBlock = await findBookingBlock(bookingRootRef, block.id);
+  if (bookingBlock) {
+    await bookingBlock.in.remove(bookingRootRef).committed;
   }
 }
 
@@ -312,7 +422,7 @@ export async function updateBaseAvailabilityWindow(
   input: { startMinutes: number; endMinutes: number },
 ) {
   return db
-    .update("baseAvailabilityWindows", window, {
+    .update("baseAvailabilityWindows", window.ref, {
       startMinutes: input.startMinutes,
       endMinutes: input.endMinutes,
       status: "active",
@@ -322,5 +432,29 @@ export async function updateBaseAvailabilityWindow(
 }
 
 export async function deactivateBaseAvailabilityWindow(window: BaseAvailabilityRow) {
-  return db.update("baseAvailabilityWindows", window, { status: "inactive" }).committed;
+  return db.update("baseAvailabilityWindows", window.ref, { status: "inactive" }).committed;
+}
+
+export async function loadProviderPrivateRoot(provider: ProviderRow) {
+  return await fetchProviderPrivateRoot(provider);
+}
+
+export function getBookingRootRef(provider: ProviderRow) {
+  return bookingRootRefFromProvider(provider);
+}
+
+export async function loadBookingBlockRows(bookingRootRef: RowRef<"bookingRoots">) {
+  return db.query("bookingBlocks", {
+    in: bookingRootRef,
+    orderBy: "startsAt",
+    order: "asc",
+  });
+}
+
+export async function loadBookingRows(bookingRootRef: RowRef<"bookingRoots">) {
+  return db.query("bookings", {
+    in: bookingRootRef,
+    orderBy: "startsAt",
+    order: "asc",
+  });
 }

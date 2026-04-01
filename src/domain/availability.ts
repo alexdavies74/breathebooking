@@ -1,4 +1,4 @@
-import type { RowHandle } from "@vennbase/core";
+import type { DbQueryProjectedRow, RowHandle } from "@vennbase/core";
 import type { Schema } from "../lib/schema";
 import {
   addDays,
@@ -15,21 +15,19 @@ import {
 import type { BookingDraft, SlotShape, WeekBlock } from "./types";
 
 type AvailabilityRow = RowHandle<Schema, "baseAvailabilityWindows">;
-type SessionRow = RowHandle<Schema, "sessions">;
+type BookingRow = RowHandle<Schema, "bookings">;
+type BookingKeyRow = DbQueryProjectedRow<Schema, "bookings">;
+type BookingBlockKeyRow = DbQueryProjectedRow<Schema, "bookingBlocks">;
 type PersonalBlockRow = RowHandle<Schema, "personalBlocks">;
-type BusyWindowRow = RowHandle<Schema, "publicBusyWindows">;
 type PresetRow = RowHandle<Schema, "rebookingPresets">;
 type ClientRow = RowHandle<Schema, "clients">;
+type SavedBookingRow = RowHandle<Schema, "savedBookings">;
 
-interface BusyWindowShape {
+interface BusyRange {
   id: string;
-  fields: {
-    startsAt: number;
-    endsAt: number;
-    kind: string;
-    originRef: string;
-    label?: string;
-  };
+  startsAt: number;
+  endsAt: number;
+  kind: "booking" | "block";
 }
 
 interface DayWindow {
@@ -104,27 +102,6 @@ function subtractRange(windows: DayWindow[], start: number, end: number): DayWin
   return next;
 }
 
-function toBookedOwnBlock(session: SessionRow): WeekBlock {
-  const startsAt = session.fields.earliestStartAt ?? session.fields.guaranteedStartAt;
-  const endsAt = session.fields.guaranteedStartAt + session.fields.durationMinutes * 60 * 1000;
-
-  return {
-    id: session.id,
-    dayKey: toDayKey(startsAt),
-    startsAt,
-    endsAt,
-    state: "booked-own",
-    interactive: true,
-    label: session.fields.slotLabel,
-    guaranteedStartAt: session.fields.guaranteedStartAt,
-    earliestStartAt: session.fields.earliestStartAt,
-    sessionRef: session.ref,
-    sourceKind: "session",
-    sourceId: session.id,
-    weekday: weekdayFromTimestamp(startsAt),
-  };
-}
-
 function createAvailableBlock(window: DayWindow): WeekBlock[] {
   if (window.earliestStart !== undefined && window.earliestStart < window.start) {
     return [
@@ -175,33 +152,93 @@ function createAvailableBlock(window: DayWindow): WeekBlock[] {
   ];
 }
 
-function activeSessions(rows: SessionRow[]): SessionRow[] {
+function activeBookings(rows: BookingRow[]): BookingRow[] {
   return rows.filter((row) => row.fields.status !== "canceled");
 }
 
-function activeBusyWindows(rows: BusyWindowRow[]): BusyWindowShape[] {
-  return rows.filter((row) => row.fields.kind !== "inactive");
+function activeSavedBookings(rows: SavedBookingRow[]): SavedBookingRow[] {
+  return rows.filter((row) => row.fields.status !== "canceled");
 }
 
-function toBlockedBlock(row: BusyWindowShape, ownSessionIds: Set<string>): WeekBlock {
+function toBookedOwnBlock(savedBooking: SavedBookingRow): WeekBlock {
+  const startsAt = savedBooking.fields.earliestStartAt ?? savedBooking.fields.guaranteedStartAt;
+
+  return {
+    id: savedBooking.fields.bookingRef.id,
+    dayKey: toDayKey(startsAt),
+    startsAt,
+    endsAt: savedBooking.fields.endsAt,
+    state: "booked-own",
+    interactive: true,
+    label: savedBooking.fields.slotLabel,
+    guaranteedStartAt: savedBooking.fields.guaranteedStartAt,
+    earliestStartAt: savedBooking.fields.earliestStartAt,
+    bookingRef: savedBooking.fields.bookingRef,
+    sourceKind: "booking",
+    sourceId: savedBooking.fields.bookingRef.id,
+    weekday: weekdayFromTimestamp(startsAt),
+  };
+}
+
+function toBookedProviderBlock(booking: BookingRow): WeekBlock {
+  const startsAt = booking.fields.earliestStartAt ?? booking.fields.guaranteedStartAt;
+
+  return {
+    id: booking.id,
+    dayKey: toDayKey(startsAt),
+    startsAt,
+    endsAt: booking.fields.endsAt,
+    state: "booked-own",
+    interactive: true,
+    label: booking.fields.slotLabel,
+    guaranteedStartAt: booking.fields.guaranteedStartAt,
+    earliestStartAt: booking.fields.earliestStartAt,
+    bookingRef: booking.ref,
+    sourceKind: "booking",
+    sourceId: booking.id,
+    weekday: weekdayFromTimestamp(startsAt),
+  };
+}
+
+function toBufferedBookingRange(row: BookingKeyRow, travelTimeMinutes: number): BusyRange {
+  const travelMs = travelTimeMinutes * 60 * 1000;
   return {
     id: row.id,
-    dayKey: toDayKey(row.fields.startsAt),
-    startsAt: row.fields.startsAt,
-    endsAt: row.fields.endsAt,
-    state: ownSessionIds.has(row.fields.originRef) ? "booked-own" : "booked-other",
-    interactive: ownSessionIds.has(row.fields.originRef),
-    label: ownSessionIds.has(row.fields.originRef) ? row.fields.label : "Unavailable",
-    sourceKind: ownSessionIds.has(row.fields.originRef) ? "session" : "busy",
-    sourceId: row.fields.originRef,
-    weekday: weekdayFromTimestamp(row.fields.startsAt),
+    startsAt: row.fields.startsAt - travelMs,
+    endsAt: row.fields.endsAt + travelMs,
+    kind: "booking",
+  };
+}
+
+function toBufferedBlockRange(row: BookingBlockKeyRow, travelTimeMinutes: number): BusyRange {
+  const travelMs = travelTimeMinutes * 60 * 1000;
+  return {
+    id: row.id,
+    startsAt: row.fields.startsAt - travelMs,
+    endsAt: row.fields.endsAt + travelMs,
+    kind: "block",
+  };
+}
+
+function toBlockedBlock(row: BusyRange): WeekBlock {
+  return {
+    id: row.id,
+    dayKey: toDayKey(row.startsAt),
+    startsAt: row.startsAt,
+    endsAt: row.endsAt,
+    state: row.kind === "block" ? "blocked" : "booked-other",
+    interactive: false,
+    label: "Unavailable",
+    sourceKind: "busy",
+    sourceId: row.id,
+    weekday: weekdayFromTimestamp(row.startsAt),
   };
 }
 
 export function buildProviderWeekBlocks(args: {
   baseAvailability: AvailabilityRow[];
   personalBlocks: PersonalBlockRow[];
-  sessions: SessionRow[];
+  bookings: BookingRow[];
   horizonDays: number;
 }): WeekBlock[] {
   const windows = toDayWindowsFromBase(
@@ -223,50 +260,50 @@ export function buildProviderWeekBlocks(args: {
       weekday: weekdayFromTimestamp(row.fields.startsAt),
     }));
 
-  const sessionBlocks = activeSessions(args.sessions).map((session) => toBookedOwnBlock(session));
+  const bookingBlocks = activeBookings(args.bookings).map((booking) => toBookedProviderBlock(booking));
 
-  return [...windows.flatMap(createAvailableBlock), ...providerBlocks, ...sessionBlocks].sort(
+  return [...windows.flatMap(createAvailableBlock), ...providerBlocks, ...bookingBlocks].sort(
     (left, right) => left.startsAt - right.startsAt,
   );
 }
 
 export function buildClientWeekBlocks(args: {
   baseAvailability: AvailabilityRow[];
-  sessions: SessionRow[];
-  publicBusyWindows: BusyWindowRow[];
+  bookings: BookingKeyRow[];
+  bookingBlocks: BookingBlockKeyRow[];
+  savedBookings: SavedBookingRow[];
   client: ClientRow;
   horizonDays: number;
-  excludeSessionId?: string;
+  excludeBookingId?: string;
 }): WeekBlock[] {
   let windows = toDayWindowsFromBase(
     args.baseAvailability.filter((row) => row.fields.status !== "inactive"),
     args.horizonDays,
   );
-  const sessions = activeSessions(args.sessions).filter((row) => row.id !== args.excludeSessionId);
-  const busyWindows = activeBusyWindows(args.publicBusyWindows)
-    .filter((row) => row.fields.originRef !== args.excludeSessionId)
-    .map((row) => ({
-      ...row,
-      fields: {
-        ...row.fields,
-        startsAt: row.fields.startsAt - args.client.fields.travelTimeMinutes * 60 * 1000,
-        endsAt: row.fields.endsAt + args.client.fields.travelTimeMinutes * 60 * 1000,
-      },
-    }));
+  const ownBookings = activeSavedBookings(args.savedBookings).filter(
+    (row) => row.fields.bookingRef.id !== args.excludeBookingId,
+  );
+  const ownBookingIds = new Set(ownBookings.map((row) => row.fields.bookingRef.id));
+  const sharedBookingRanges = args.bookings
+    .filter((row) => row.id !== args.excludeBookingId)
+    .map((row) => toBufferedBookingRange(row, args.client.fields.travelTimeMinutes));
+  const sharedBlockRanges = args.bookingBlocks.map((row) =>
+    toBufferedBlockRange(row, args.client.fields.travelTimeMinutes),
+  );
+  const busyRanges = [...sharedBookingRanges, ...sharedBlockRanges];
 
-  busyWindows.forEach((row) => {
-    windows = subtractRange(windows, row.fields.startsAt, row.fields.endsAt);
+  busyRanges.forEach((row) => {
+    windows = subtractRange(windows, row.startsAt, row.endsAt);
   });
 
   windows = windows.filter((window) => canFitDuration(window, args.client.fields.minimumDurationMinutes));
 
-  const ownSessionIds = new Set(sessions.map((session) => session.id));
-  const sessionBlocks = sessions.map((session) => toBookedOwnBlock(session));
-  const blockedBlocks = busyWindows
-    .filter((row) => !ownSessionIds.has(row.fields.originRef))
-    .map((row) => toBlockedBlock(row, ownSessionIds));
+  const ownBookingBlocks = ownBookings.map((booking) => toBookedOwnBlock(booking));
+  const blockedBlocks = busyRanges
+    .filter((row) => row.kind === "block" || !ownBookingIds.has(row.id))
+    .map((row) => toBlockedBlock(row));
 
-  return [...windows.flatMap(createAvailableBlock), ...sessionBlocks, ...blockedBlocks].sort(
+  return [...windows.flatMap(createAvailableBlock), ...ownBookingBlocks, ...blockedBlocks].sort(
     (left, right) => left.startsAt - right.startsAt,
   );
 }
@@ -302,24 +339,13 @@ export function createBookingDraftFromBlock(
   };
 }
 
-export function createBookingDraftFromPreviousSession(session: SessionRow): BookingDraft {
-  const startsAt = session.fields.guaranteedStartAt;
+export function toSlotShapeFromSavedBooking(
+  savedBooking: Pick<SavedBookingRow, "fields">,
+): SlotShape {
   return {
-    startsAt,
-    guaranteedStartAt: session.fields.guaranteedStartAt,
-    earliestStartAt: undefined,
-    endsAt: session.fields.guaranteedStartAt + session.fields.durationMinutes * 60 * 1000,
-    durationMinutes: session.fields.durationMinutes,
-    dayKey: toDayKey(startsAt),
-    sourceBlockId: session.id,
-  };
-}
-
-export function toSlotShapeFromSession(session: SessionRow): SlotShape {
-  return {
-    weekday: weekdayFromTimestamp(session.fields.guaranteedStartAt),
-    startMinutes: minutesFromTimestamp(session.fields.guaranteedStartAt),
-    durationMinutes: session.fields.durationMinutes,
+    weekday: weekdayFromTimestamp(savedBooking.fields.guaranteedStartAt),
+    startMinutes: minutesFromTimestamp(savedBooking.fields.guaranteedStartAt),
+    durationMinutes: savedBooking.fields.durationMinutes,
   };
 }
 

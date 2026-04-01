@@ -36,9 +36,8 @@ function createClientAccess(overrides: Partial<ClientWorkspaceAccess> = {}) {
   return {
     clientId: "client-1",
     clientName: "Casey Client",
-    providerId: "provider-1",
     providerName: "Provider Practice",
-    providerBaseUrl: "https://api.puter.com",
+    clientBaseUrl: "https://api.puter.com",
     lastOpenedAt: new Date("2026-03-29T12:00:00Z").getTime(),
     ...overrides,
   };
@@ -74,7 +73,6 @@ describe("HomeRoute", () => {
       createClientAccess({
         clientId: "client-2",
         clientName: "Taylor Client",
-        providerId: "provider-2",
         providerName: "Second Provider",
       }),
     ]);

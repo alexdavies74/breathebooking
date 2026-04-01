@@ -1,4 +1,4 @@
-import { collection, defineSchema, field, index } from "@vennbase/core";
+import { collection, defineSchema, field } from "@vennbase/core";
 
 export const schema = defineSchema({
   providers: collection({
@@ -6,10 +6,21 @@ export const schema = defineSchema({
       displayName: field.string(),
       timezone: field.string(),
       ownerUsername: field.string(),
-      defaultWeekHorizon: field.number().default(4),
+      defaultWeekHorizon: field.number(),
+      bookingSubmitterLink: field.string().optional(),
+      privateRootRef: field.ref("providerPrivateRoots").optional(),
     },
-    indexes: {
-      byDisplayName: index("displayName"),
+  }),
+  providerPrivateRoots: collection({
+    fields: {
+      providerRef: field.ref("providers").optional(),
+      createdAt: field.number(),
+    },
+  }),
+  bookingRoots: collection({
+    fields: {
+      providerRef: field.ref("providers").optional(),
+      createdAt: field.number(),
     },
   }),
   baseAvailabilityWindows: collection({
@@ -18,52 +29,40 @@ export const schema = defineSchema({
       weekday: field.number(),
       startMinutes: field.number(),
       endMinutes: field.number(),
-      status: field.string().default("active"),
-      sortKey: field.number(),
-    },
-    indexes: {
-      bySortKey: index("sortKey"),
-      byWeekday: index(["weekday", "sortKey"]),
+      status: field.string(),
+      sortKey: field.number().key(),
     },
   }),
   clients: collection({
-    in: ["providers"],
+    in: ["providerPrivateRoots"],
     fields: {
-      fullName: field.string(),
-      email: field.string().optional(),
-      phone: field.string().optional(),
-      address: field.string().optional(),
+      fullName: field.string().key(),
+      providerViewerLink: field.string(),
       status: field.string(),
-      minimumDurationMinutes: field.number().default(180),
-      travelTimeMinutes: field.number().default(30),
+      minimumDurationMinutes: field.number(),
+      travelTimeMinutes: field.number(),
       travelBeforeMin: field.number().optional(),
       travelBeforeMax: field.number().optional(),
       travelAfterMin: field.number().optional(),
       travelAfterMax: field.number().optional(),
       earlyStartEnabled: field.boolean().optional(),
     },
-    indexes: {
-      byName: index("fullName"),
-      byStatus: index("status"),
+  }),
+  personalBlocks: collection({
+    in: ["providerPrivateRoots"],
+    fields: {
+      startsAt: field.number().key(),
+      endsAt: field.number(),
+      source: field.string(),
+      label: field.string().optional(),
     },
   }),
-  clientAllowedWindows: collection({
-    in: ["clients"],
+  bookings: collection({
+    in: ["bookingRoots"],
     fields: {
-      weekday: field.number(),
-      startMinutes: field.number(),
-      endMinutes: field.number(),
-      earliestStartMinutes: field.number().optional(),
-      sortKey: field.number(),
-    },
-    indexes: {
-      byWeekday: index(["weekday", "sortKey"]),
-    },
-  }),
-  sessions: collection({
-    in: ["clients"],
-    fields: {
-      startsAt: field.number(),
+      clientRef: field.ref("clients"),
+      startsAt: field.number().key(),
+      endsAt: field.number().key(),
       guaranteedStartAt: field.number(),
       earliestStartAt: field.number().optional(),
       durationMinutes: field.number(),
@@ -71,49 +70,42 @@ export const schema = defineSchema({
       bookedByRole: field.string(),
       slotLabel: field.string(),
     },
-    indexes: {
-      byStart: index("startsAt"),
-      byStatusStart: index(["status", "startsAt"]),
-    },
   }),
-  personalBlocks: collection({
-    in: ["providers"],
+  bookingBlocks: collection({
+    in: ["bookingRoots"],
     fields: {
-      startsAt: field.number(),
-      endsAt: field.number(),
+      startsAt: field.number().key(),
+      endsAt: field.number().key(),
       source: field.string(),
-      label: field.string().optional(),
-    },
-    indexes: {
-      byStart: index("startsAt"),
-    },
-  }),
-  publicBusyWindows: collection({
-    in: ["providers", "clients"],
-    fields: {
-      startsAt: field.number(),
-      endsAt: field.number(),
-      kind: field.string(),
       originRef: field.string(),
       label: field.string().optional(),
     },
-    indexes: {
-      byStart: index("startsAt"),
-      byKindStart: index(["kind", "startsAt"]),
-    },
   }),
   rebookingPresets: collection({
-    in: ["clients"],
+    in: ["user"],
     fields: {
+      clientRef: field.ref("clients").key(),
       weekday: field.number(),
       startMinutes: field.number(),
       durationMinutes: field.number(),
       label: field.string(),
-      lastUsedAt: field.number(),
+      lastUsedAt: field.number().key(),
       earliestStartMinutes: field.number().optional(),
     },
-    indexes: {
-      byLastUsedAt: index("lastUsedAt"),
+  }),
+  savedBookings: collection({
+    in: ["user"],
+    fields: {
+      clientRef: field.ref("clients").key(),
+      bookingRef: field.ref("bookings"),
+      status: field.string(),
+      startsAt: field.number().key(),
+      endsAt: field.number().key(),
+      guaranteedStartAt: field.number(),
+      earliestStartAt: field.number().optional(),
+      durationMinutes: field.number(),
+      bookedByRole: field.string(),
+      slotLabel: field.string(),
     },
   }),
 });

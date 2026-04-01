@@ -5,9 +5,9 @@ import type { Schema } from "./schema";
 type ProviderRow = RowHandle<Schema, "providers">;
 type ClientRow = RowHandle<Schema, "clients">;
 
-export function buildClientInviteLink(provider: ProviderRow, client: ClientRow) {
-  const token = db.createInviteToken(provider).value;
-  const url = new URL(db.createShareLink(provider, token.token));
+export async function buildClientInviteLink(provider: ProviderRow, client: ClientRow) {
+  const shareLink = await db.createShareLink(client.ref, "viewer").committed;
+  const url = new URL(shareLink);
   url.pathname = "/invite";
   url.searchParams.set("clientId", client.id);
   url.searchParams.set("clientName", client.fields.fullName);

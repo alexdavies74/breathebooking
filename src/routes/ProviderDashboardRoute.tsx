@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
-import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
+import { useCurrentUser, useQuery, useRow, useSavedRow } from "@vennbase/react";
 import { useNavigate } from "react-router-dom";
 import {
   createBaseAvailabilityWindow,
   createClient,
-  createPersonalBlock,
   createPractice,
+  createPersonalBlock,
   deactivateBaseAvailabilityWindow,
   deactivatePersonalBlock,
+  getBookingRootRef,
   updateBaseAvailabilityWindow,
   updatePersonalBlock,
 } from "../domain/actions";
@@ -18,7 +19,6 @@ import { manualCalendarSyncAdapter } from "../domain/calendarSync";
 import { clamp, minutesFromTimestamp, timestampFromDayAndMinutes, toDayKey, weekdayFromTimestamp } from "../domain/date";
 import type { ProviderEditableKind, ProviderRangeDraft, WeekBlock } from "../domain/types";
 import { WeekView } from "../components/WeekView";
-import { buildClientHomePath } from "../lib/clientAccess";
 import { db } from "../lib/db";
 import type { Schema } from "../lib/schema";
 
@@ -62,23 +62,39 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
     enabled: Boolean(session.session?.signedIn),
   });
   const provider = savedProvider.data ?? null;
+  const privateRoot = useRow(db, provider?.fields.privateRootRef ?? undefined);
+  const bookingRootRef = useMemo(() => {
+    if (!provider) {
+      return null;
+    }
+
+    try {
+      return getBookingRootRef(provider);
+    } catch {
+      return null;
+    }
+  }, [provider]);
   const [horizonDays, setHorizonDays] = useState(14);
   const [calendarStatus, setCalendarStatus] = useState("Calendar sync is stubbed for v1.");
   const availability = useQuery(
     db,
     "baseAvailabilityWindows",
-    provider ? { in: provider.ref, index: "byWeekday", order: "asc" } : null,
+    provider ? { in: provider.ref, orderBy: "sortKey", order: "asc" } : null,
   );
-  const clients = useQuery(db, "clients", provider ? { in: provider.ref, index: "byName", order: "asc" } : null);
+  const clients = useQuery(
+    db,
+    "clients",
+    privateRoot.data ? { in: privateRoot.data.ref, orderBy: "fullName", order: "asc" } : null,
+  );
   const personalBlocks = useQuery(
     db,
     "personalBlocks",
-    provider ? { in: provider.ref, index: "byStart", order: "asc" } : null,
+    privateRoot.data ? { in: privateRoot.data.ref, orderBy: "startsAt", order: "asc" } : null,
   );
-  const sessions = useQuery(
+  const bookings = useQuery(
     db,
-    "sessions",
-    clients.rows.length > 0 ? { in: clients.rows.map((client) => client.ref), index: "byStart", order: "asc" } : null,
+    "bookings",
+    bookingRootRef ? { in: bookingRootRef, orderBy: "startsAt", order: "asc" } : null,
   );
 
   const [practiceName, setPracticeName] = useState("");
@@ -90,19 +106,19 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
 
   const blocks = useMemo(() => {
     return buildProviderWeekBlocks({
-      baseAvailability: availability.rows,
-      personalBlocks: personalBlocks.rows,
-      sessions: sessions.rows,
+      baseAvailability: availability.rows ?? [],
+      personalBlocks: personalBlocks.rows ?? [],
+      bookings: bookings.rows ?? [],
       horizonDays,
     });
-  }, [availability.rows, horizonDays, personalBlocks.rows, sessions.rows]);
+  }, [availability.rows, bookings.rows, horizonDays, personalBlocks.rows]);
 
   const availabilityById = useMemo(
-    () => new Map(availability.rows.map((row) => [row.id, row])),
+    () => new Map((availability.rows ?? []).map((row) => [row.id, row])),
     [availability.rows],
   );
   const personalBlocksById = useMemo(
-    () => new Map(personalBlocks.rows.map((row) => [row.id, row])),
+    () => new Map((personalBlocks.rows ?? []).map((row) => [row.id, row])),
     [personalBlocks.rows],
   );
 
@@ -379,23 +395,13 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
           <p className="eyebrow">Clients</p>
           <h2>Active roster</h2>
           <div className="stack-sm">
-            {clients.rows.map((client) => (
+            {(clients.rows ?? []).map((client) => (
               <div className="summary-card" key={client.id}>
                 <strong>{client.fields.fullName}</strong>
                 <p>
                   Minimum {client.fields.minimumDurationMinutes / 60}h · Travel {client.fields.travelTimeMinutes} min
                 </p>
                 <div className="row-actions">
-                  <a
-                    className="button button--ghost"
-                    href={buildClientHomePath({
-                      clientId: client.id,
-                      providerId: provider.id,
-                      providerBaseUrl: provider.ref.baseUrl,
-                    })}
-                  >
-                    Open client view
-                  </a>
                   <a className="button button--ghost" href={`/provider/clients/${client.id}/settings`}>
                     Client settings
                   </a>

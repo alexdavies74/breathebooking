@@ -1,7 +1,7 @@
 import type { RowRef } from "@vennbase/core";
 
 export type Role = "provider" | "client";
-export type WeekBlockKind = "availability" | "personal-block" | "session" | "busy";
+export type WeekBlockKind = "availability" | "personal-block" | "booking" | "busy";
 export type ProviderEditableKind = "availability" | "personal-block";
 
 export type WeekBlockState =
@@ -21,7 +21,7 @@ export interface WeekBlock {
   label?: string;
   guaranteedStartAt?: number;
   earliestStartAt?: number;
-  sessionRef?: RowRef<"sessions">;
+  bookingRef?: RowRef<"bookings">;
   sourceKind?: WeekBlockKind;
   sourceId?: string;
   weekday?: number;
@@ -73,6 +73,11 @@ export interface ClientSummary {
   id: string;
   fullName: string;
   status: string;
+  minimumDurationMinutes: number;
+  travelTimeMinutes: number;
+}
+
+export interface ClientScheduleSettings {
   minimumDurationMinutes: number;
   travelTimeMinutes: number;
 }

@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
-import { useCurrentUser, useQuery, useSavedRow } from "@vennbase/react";
+import { useCurrentUser, useQuery, useRow, useSavedRow, useShareLink } from "@vennbase/react";
 import QRCode from "qrcode";
 import { useParams } from "react-router-dom";
 import { updateClientSettings } from "../domain/actions";
-import { buildClientInviteLink } from "../lib/clientInvite";
 import { db } from "../lib/db";
 import type { Schema } from "../lib/schema";
 
@@ -21,24 +20,19 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
     enabled: Boolean(session.session?.signedIn),
   });
   const provider = savedProvider.data ?? null;
+  const privateRoot = useRow(db, provider?.fields.privateRootRef ?? undefined);
   const providerClients = useQuery(
     db,
     "clients",
-    provider ? { in: provider.ref, index: "byName", order: "asc" } : null,
+    privateRoot.data ? { in: privateRoot.data.ref, orderBy: "fullName", order: "asc" } : null,
   );
-  const client = clientId ? providerClients.rows.find((row) => row.id === clientId) ?? null : null;
+  const client = clientId ? (providerClients.rows ?? []).find((row) => row.id === clientId) ?? null : null;
+  const inviteLink = useShareLink(db, client?.ref, { role: "viewer", enabled: Boolean(client) });
 
   const [minimumDurationMinutes, setMinimumDurationMinutes] = useState(180);
   const [travelTimeMinutes, setTravelTimeMinutes] = useState(30);
   const [inviteQr, setInviteQr] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const inviteLink = useMemo(() => {
-    if (!provider || !client) {
-      return null;
-    }
-
-    return buildClientInviteLink(provider, client);
-  }, [client, provider]);
 
   useEffect(() => {
     if (!client) {
@@ -50,13 +44,32 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
   }, [client]);
 
   useEffect(() => {
-    if (!inviteLink) {
+    if (!inviteLink.shareLink) {
       setInviteQr(null);
       return;
     }
 
-    void QRCode.toDataURL(inviteLink, { margin: 1, width: 240 }).then(setInviteQr);
-  }, [inviteLink]);
+    const url = new URL(inviteLink.shareLink);
+    url.pathname = "/invite";
+    url.searchParams.set("clientId", client?.id ?? "");
+    url.searchParams.set("clientName", client?.fields.fullName ?? "");
+    url.searchParams.set("providerName", provider?.fields.displayName ?? "");
+
+    void QRCode.toDataURL(url.toString(), { margin: 1, width: 240 }).then(setInviteQr);
+  }, [client?.fields.fullName, client?.id, inviteLink.shareLink, provider?.fields.displayName]);
+
+  const resolvedInviteLink = useMemo(() => {
+    if (!inviteLink.shareLink || !client) {
+      return null;
+    }
+
+    const url = new URL(inviteLink.shareLink);
+    url.pathname = "/invite";
+    url.searchParams.set("clientId", client.id);
+    url.searchParams.set("clientName", client.fields.fullName);
+    url.searchParams.set("providerName", provider?.fields.displayName ?? "");
+    return url.toString();
+  }, [client, inviteLink.shareLink, provider?.fields.displayName]);
 
   if (!session.session?.signedIn) {
     return (
@@ -73,6 +86,7 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
   const isLoadingAccess =
     currentUser.status === "loading" ||
     savedProvider.status === "loading" ||
+    privateRoot.status === "loading" ||
     providerClients.status === "loading";
   const isProviderOwner = Boolean(provider && currentUser.data?.username === provider.fields.ownerUsername);
   const isClientChildOfProvider = Boolean(client);
@@ -124,11 +138,11 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
             onChange={(event) => setTravelTimeMinutes(Number(event.target.value))}
           />
         </label>
-        {inviteLink ? (
+        {resolvedInviteLink ? (
           <div className="invite-card">
             <span className="eyebrow">Invite link</span>
-            <a href={inviteLink}>{inviteLink}</a>
-            <button className="button button--ghost" onClick={() => navigator.clipboard.writeText(inviteLink)} type="button">
+            <a href={resolvedInviteLink}>{resolvedInviteLink}</a>
+            <button className="button button--ghost" onClick={() => navigator.clipboard.writeText(resolvedInviteLink)} type="button">
               Copy link
             </button>
             {inviteQr ? <img alt="Invite QR code" className="qr-code" src={inviteQr} /> : null}

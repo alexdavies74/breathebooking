@@ -1,9 +1,9 @@
+import { CURRENT_USER, type RowRef } from "@vennbase/core";
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams, useParams } from "react-router-dom";
-import type { RowRef } from "@vennbase/core";
+import { useParams } from "react-router-dom";
 import type { UseSessionResult } from "@vennbase/react";
 import { useQuery, useRow } from "@vennbase/react";
-import { cancelSession, createSessionBooking, updateSessionBooking } from "../domain/actions";
+import { cancelBooking, createBooking, updateBooking } from "../domain/actions";
 import {
   buildClientWeekBlocks,
   createBookingDraftFromBlock,
@@ -11,7 +11,7 @@ import {
   findMatchingSlotAtTime,
   findNextMatchingSlot,
   findSlotContainingTime,
-  toSlotShapeFromSession,
+  toSlotShapeFromSavedBooking,
 } from "../domain/availability";
 import { addDays, formatDayLabel, formatDuration, formatTime, minutesFromTimestamp } from "../domain/date";
 import { WeekView } from "../components/WeekView";
@@ -26,20 +26,20 @@ interface ClientHomeRouteProps {
 
 export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   const { clientId } = useParams();
-  const [searchParams] = useSearchParams();
-  const providerIdFromUrl = searchParams.get("providerId");
-  const providerBaseUrlFromUrl = searchParams.get("providerBaseUrl");
   const [horizonDays, setHorizonDays] = useState(14);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
+  const [editingBookingId, setEditingBookingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [draft, setDraft] = useState<ReturnType<typeof createBookingDraftFromBlock> | null>(null);
   const [savedAccess, setSavedAccess] = useState<Awaited<ReturnType<typeof findSavedClientAccess>> | undefined>(undefined);
-  const needsSavedAccess = Boolean(clientId && (!providerIdFromUrl || !providerBaseUrlFromUrl));
+  const [providerRef, setProviderRef] = useState<RowRef<"providers"> | null>(null);
+  const [providerAccessError, setProviderAccessError] = useState<string | null>(null);
+  const [bookingRootRef, setBookingRootRef] = useState<RowRef<"bookingRoots"> | null>(null);
+  const [bookingRootError, setBookingRootError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!needsSavedAccess || !clientId) {
+    if (!clientId) {
       setSavedAccess(null);
       return;
     }
@@ -55,84 +55,173 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     return () => {
       isCancelled = true;
     };
-  }, [clientId, needsSavedAccess]);
+  }, [clientId]);
 
-  const resolvedProviderId = providerIdFromUrl ?? savedAccess?.providerId;
-  const resolvedProviderBaseUrl = providerBaseUrlFromUrl ?? savedAccess?.providerBaseUrl;
-  const providerRef: RowRef<"providers"> | undefined =
-    resolvedProviderId && resolvedProviderBaseUrl
-      ? makeRowRef("providers", resolvedProviderId, resolvedProviderBaseUrl)
+  const clientRef =
+    clientId && savedAccess?.clientBaseUrl
+      ? makeRowRef("clients", clientId, savedAccess.clientBaseUrl)
       : undefined;
-  const provider = useRow<Schema, "providers">(db, providerRef);
-  const providerClients = useQuery(
-    db,
-    "clients",
-    provider.data ? { in: provider.data.ref, index: "byName", order: "asc" } : null,
-  );
-  const client = {
-    data: clientId ? providerClients.rows.find((row) => row.id === clientId) ?? null : null,
-  };
+  const client = useRow<Schema, "clients">(db, clientRef);
+  const provider = useRow<Schema, "providers">(db, providerRef ?? undefined);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const currentClient = client.data;
+
+    if (!currentClient) {
+      setProviderRef(null);
+      setProviderAccessError(null);
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    setProviderAccessError(null);
+    void db
+      .acceptInvite(currentClient.fields.providerViewerLink)
+      .then(async (providerRow) => {
+        if (isCancelled) {
+          return;
+        }
+
+        if (providerRow.collection !== "providers") {
+          throw new Error(`Expected providers row, got ${providerRow.collection}`);
+        }
+
+        setProviderRef(providerRow.ref as RowRef<"providers">);
+        await saveClientAccess({
+          clientId: currentClient.id,
+          clientBaseUrl: currentClient.ref.baseUrl,
+          clientName: currentClient.fields.fullName,
+          providerName: providerRow.fields.displayName,
+        });
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setProviderAccessError("We could not open the shared provider workspace for this client.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [client.data]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (!provider.data?.fields.bookingSubmitterLink) {
+      setBookingRootRef(null);
+      setBookingRootError(provider.data ? "This provider workspace is missing a booking inbox." : null);
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    setBookingRootError(null);
+    void db
+      .joinInvite(provider.data.fields.bookingSubmitterLink)
+      .then((joined) => {
+        if (isCancelled) {
+          return;
+        }
+
+        if (joined.ref.collection !== "bookingRoots") {
+          throw new Error(`Expected bookingRoots ref, got ${joined.ref.collection}`);
+        }
+
+        setBookingRootRef(joined.ref as RowRef<"bookingRoots">);
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setBookingRootError("We could not open the private booking inbox for this client.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [provider.data?.fields.bookingSubmitterLink]);
 
   const baseAvailability = useQuery(
     db,
     "baseAvailabilityWindows",
-    provider.data ? { in: provider.data.ref, index: "byWeekday", order: "asc" } : null,
+    provider.data ? { in: provider.data.ref, orderBy: "sortKey", order: "asc" } : null,
   );
-  const sessions = useQuery(db, "sessions", client.data ? { in: client.data.ref, index: "byStart", order: "asc" } : null);
+  const sharedBookings = useQuery(
+    db,
+    "bookings",
+    bookingRootRef ? { in: bookingRootRef, select: "keys", orderBy: "startsAt", order: "asc" } : null,
+  );
+  const bookingBlocks = useQuery(
+    db,
+    "bookingBlocks",
+    bookingRootRef ? { in: bookingRootRef, select: "keys", orderBy: "startsAt", order: "asc" } : null,
+  );
+  const savedBookings = useQuery(
+    db,
+    "savedBookings",
+    client.data ? { in: CURRENT_USER, where: { clientRef: client.data.ref }, orderBy: "startsAt", order: "asc" } : null,
+  );
   const presets = useQuery(
     db,
     "rebookingPresets",
-    client.data ? { in: client.data.ref, index: "byLastUsedAt", order: "desc", limit: 8 } : null,
-  );
-  const publicBusyWindows = useQuery(
-    db,
-    "publicBusyWindows",
-    provider.data ? { in: provider.data.ref, index: "byStart", order: "asc" } : null,
+    client.data ? { in: CURRENT_USER, where: { clientRef: client.data.ref }, orderBy: "lastUsedAt", order: "desc", limit: 8 } : null,
   );
 
-  function buildBlocks(excludeSessionId?: string) {
+  function buildBlocks(excludeBookingId?: string) {
     if (!client.data) {
       return [];
     }
 
     return buildClientWeekBlocks({
-      baseAvailability: baseAvailability.rows,
-      sessions: sessions.rows,
-      publicBusyWindows: publicBusyWindows.rows,
+      baseAvailability: baseAvailability.rows ?? [],
+      bookings: sharedBookings.rows ?? [],
+      bookingBlocks: bookingBlocks.rows ?? [],
+      savedBookings: savedBookings.rows ?? [],
       client: client.data,
       horizonDays,
-      excludeSessionId,
+      excludeBookingId,
     });
   }
 
   const blocks = useMemo(
-    () => buildBlocks(editingSessionId ?? undefined),
-    [baseAvailability.rows, client.data, editingSessionId, horizonDays, publicBusyWindows.rows, sessions.rows],
+    () => buildBlocks(editingBookingId ?? undefined),
+    [
+      baseAvailability.rows,
+      bookingBlocks.rows,
+      client.data,
+      editingBookingId,
+      horizonDays,
+      savedBookings.rows,
+      sharedBookings.rows,
+    ],
   );
 
-  const activeSessions = useMemo(
+  const activeBookings = useMemo(
     () =>
-      sessions.rows
+      (savedBookings.rows ?? [])
         .filter((row) => row.fields.status !== "canceled")
         .sort((left, right) => left.fields.guaranteedStartAt - right.fields.guaranteedStartAt),
-    [sessions.rows],
+    [savedBookings.rows],
   );
-  const nextSession = activeSessions.find((row) => row.fields.guaranteedStartAt >= Date.now()) ?? null;
-  const latestSession = [...activeSessions].sort(
+  const nextBooking = activeBookings.find((row) => row.fields.guaranteedStartAt >= Date.now()) ?? null;
+  const latestBooking = [...activeBookings].sort(
     (left, right) => right.fields.guaranteedStartAt - left.fields.guaranteedStartAt,
-  )[0];
-  const suggestedRebookAt = latestSession ? addDays(latestSession.fields.guaranteedStartAt, 7) : null;
+  )[0] ?? null;
+  const suggestedRebookAt = latestBooking ? addDays(latestBooking.fields.guaranteedStartAt, 7) : null;
   const suggestedRebookPrompt = suggestedRebookAt
     ? `Book ${new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(suggestedRebookAt)} ${formatTime(
         suggestedRebookAt,
       )} again on ${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(suggestedRebookAt)}?`
     : null;
-  const quickShapes = dedupePresetShapes(presets.rows).slice(0, 3);
-  const selectedSession = selectedSessionId
-    ? sessions.rows.find((row) => row.id === selectedSessionId) ?? null
+  const quickShapes = dedupePresetShapes(presets.rows ?? []).slice(0, 3);
+  const selectedBooking = selectedBookingId
+    ? activeBookings.find((row) => row.fields.bookingRef.id === selectedBookingId) ?? null
     : null;
-  const editingSession = editingSessionId
-    ? sessions.rows.find((row) => row.id === editingSessionId) ?? null
+  const editingBooking = editingBookingId
+    ? activeBookings.find((row) => row.fields.bookingRef.id === editingBookingId) ?? null
     : null;
   const selectedBlock = selectedBlockId ? blocks.find((block) => block.id === selectedBlockId) ?? null : null;
   const bookingBounds = useMemo(() => {
@@ -167,24 +256,22 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
 
     void saveClientAccess({
       clientId: client.data.id,
+      clientBaseUrl: client.data.ref.baseUrl,
       clientName: client.data.fields.fullName,
-      providerId: provider.data.id,
       providerName: provider.data.fields.displayName,
-      providerBaseUrl: provider.data.ref.baseUrl,
     });
   }, [
     client.data?.fields.fullName,
     client.data?.id,
+    client.data?.ref.baseUrl,
     provider.data?.fields.displayName,
-    provider.data?.id,
-    provider.data?.ref.baseUrl,
   ]);
 
   if (signInGate) {
     return signInGate;
   }
 
-  if (needsSavedAccess && savedAccess === undefined) {
+  if (savedAccess === undefined) {
     return (
       <div className="panel">
         <h1>Opening client home…</h1>
@@ -192,11 +279,29 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     );
   }
 
-  if (!providerRef) {
+  if (!clientId || !clientRef || !savedAccess) {
     return (
       <div className="panel">
         <h1>Client booking home</h1>
-        <p>We could not recover the provider workspace for this client. Open the original invite link again.</p>
+        <p>We could not recover the private client workspace. Open the original invite link again.</p>
+      </div>
+    );
+  }
+
+  if (providerAccessError) {
+    return (
+      <div className="panel">
+        <h1>Client booking home</h1>
+        <p>{providerAccessError}</p>
+      </div>
+    );
+  }
+
+  if (bookingRootError) {
+    return (
+      <div className="panel">
+        <h1>Client booking home</h1>
+        <p>{bookingRootError}</p>
       </div>
     );
   }
@@ -204,26 +309,28 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   function resetBookingSelection() {
     setDraft(null);
     setSelectedBlockId(null);
-    setSelectedSessionId(null);
-    setEditingSessionId(null);
+    setSelectedBookingId(null);
+    setEditingBookingId(null);
   }
 
   async function persistDraft(
     nextDraft: NonNullable<typeof draft>,
-    options: { sessionId?: string | null; resetAfterSave: boolean; announceSuccess: boolean },
+    options: { bookingId?: string | null; resetAfterSave: boolean; announceSuccess: boolean },
   ) {
-    if (!provider.data || !client.data) {
+    if (!bookingRootRef || !client.data) {
       return;
     }
 
-    const sessionToEdit = options.sessionId ? sessions.rows.find((row) => row.id === options.sessionId) ?? null : null;
+    const bookingToEdit = options.bookingId
+      ? activeBookings.find((row) => row.fields.bookingRef.id === options.bookingId) ?? null
+      : null;
 
     try {
-      if (sessionToEdit) {
-        await updateSessionBooking({
-          provider: provider.data,
+      if (bookingToEdit) {
+        await updateBooking({
+          bookingRootRef,
           client: client.data,
-          session: sessionToEdit,
+          savedBooking: bookingToEdit,
           draft: nextDraft,
           bookedByRole: "client",
         });
@@ -231,13 +338,13 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
         if (options.resetAfterSave) {
           resetBookingSelection();
         } else if (options.announceSuccess) {
-          setFeedback("Saved. Your session now reflects the new slot.");
+          setFeedback("Saved. Your booking now reflects the new slot.");
         }
         return;
       }
 
-      await createSessionBooking({
-        provider: provider.data,
+      await createBooking({
+        bookingRootRef,
         client: client.data,
         draft: nextDraft,
         bookedByRole: "client",
@@ -246,18 +353,18 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
       if (options.resetAfterSave) {
         resetBookingSelection();
       }
-      setFeedback("Booked. Your session now shows an arrival window and duration instead of a fixed end time.");
+      setFeedback("Booked. Your visit now appears in your private booking list.");
     } catch (error) {
-      setFeedback(sessionToEdit ? "Could not update that session." : "Could not book that session.");
+      setFeedback(bookingToEdit ? "Could not update that booking." : "Could not book that slot.");
     }
   }
 
   async function bookSameSlotNow() {
-    if (!latestSession || !client.data || !suggestedRebookAt) {
+    if (!latestBooking || !client.data || !suggestedRebookAt) {
       return;
     }
 
-    const slot = findMatchingSlotAtTime(blocks, suggestedRebookAt, latestSession.fields.durationMinutes);
+    const slot = findMatchingSlotAtTime(blocks, suggestedRebookAt, latestBooking.fields.durationMinutes);
     if (!slot) {
       setFeedback("That time next week is no longer free. Pick a nearby time below.");
       setSelectedBlockId(null);
@@ -266,16 +373,16 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     }
 
     const nextDraft = createBookingDraftFromBlock(slot, client.data.fields.minimumDurationMinutes);
-    await persistDraft(nextDraft, { sessionId: null, resetAfterSave: true, announceSuccess: true });
+    await persistDraft(nextDraft, { bookingId: null, resetAfterSave: true, announceSuccess: true });
   }
 
-  function draftSuggestedRebooking(sessionRow: NonNullable<typeof selectedSession | typeof latestSession>) {
+  function draftSuggestedRebooking(bookingRow: NonNullable<typeof selectedBooking | typeof latestBooking>) {
     if (!client.data) {
       return;
     }
 
-    const nextWeekStartAt = addDays(sessionRow.fields.guaranteedStartAt, 7);
-    const slot = findMatchingSlotAtTime(blocks, nextWeekStartAt, sessionRow.fields.durationMinutes);
+    const nextWeekStartAt = addDays(bookingRow.fields.guaranteedStartAt, 7);
+    const slot = findMatchingSlotAtTime(blocks, nextWeekStartAt, bookingRow.fields.durationMinutes);
     if (!slot) {
       setFeedback("That time next week is no longer free. Pick a nearby time below.");
       setSelectedBlockId(null);
@@ -284,62 +391,67 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     }
 
     setFeedback(null);
-    setEditingSessionId(null);
+    setEditingBookingId(null);
     setSelectedBlockId(slot.id);
-    setSelectedSessionId(null);
-    setDraft(createBookingDraftFromBlock(slot, client.data.fields.minimumDurationMinutes, toSlotShapeFromSession(sessionRow)));
+    setSelectedBookingId(null);
+    setDraft(createBookingDraftFromBlock(slot, client.data.fields.minimumDurationMinutes, toSlotShapeFromSavedBooking(bookingRow)));
   }
 
-  function startEditingSession(sessionRow: NonNullable<typeof selectedSession>) {
+  function startEditingBooking(bookingRow: NonNullable<typeof selectedBooking>) {
     if (!client.data) {
       return;
     }
 
-    const editableBlocks = buildBlocks(sessionRow.id);
+    const editableBlocks = buildBlocks(bookingRow.fields.bookingRef.id);
     const matchingBlock = findSlotContainingTime(
       editableBlocks,
-      sessionRow.fields.guaranteedStartAt,
-      sessionRow.fields.durationMinutes,
+      bookingRow.fields.guaranteedStartAt,
+      bookingRow.fields.durationMinutes,
     );
 
-    setEditingSessionId(sessionRow.id);
-    setSelectedSessionId(sessionRow.id);
+    setEditingBookingId(bookingRow.fields.bookingRef.id);
+    setSelectedBookingId(bookingRow.fields.bookingRef.id);
     setFeedback(null);
 
     if (!matchingBlock) {
       setDraft(null);
       setSelectedBlockId(null);
-      setFeedback("That session's current time is no longer open. Pick another available slot below.");
+      setFeedback("That booking's current time is no longer open. Pick another available slot below.");
       return;
     }
 
     setSelectedBlockId(matchingBlock.id);
-    setDraft(createBookingDraftFromBlock(
-      matchingBlock,
-      client.data.fields.minimumDurationMinutes,
-      toSlotShapeFromSession(sessionRow),
-    ));
+    setDraft(
+      createBookingDraftFromBlock(
+        matchingBlock,
+        client.data.fields.minimumDurationMinutes,
+        toSlotShapeFromSavedBooking(bookingRow),
+      ),
+    );
   }
 
-  async function cancelSelectedSession(sessionRow: NonNullable<typeof selectedSession>) {
-    if (!provider.data) {
+  async function cancelSelectedBooking(bookingRow: NonNullable<typeof selectedBooking>) {
+    if (!bookingRootRef) {
       return;
     }
 
     try {
-      await cancelSession(provider.data, sessionRow);
+      await cancelBooking({
+        bookingRootRef,
+        savedBooking: bookingRow,
+      });
       resetBookingSelection();
-      setFeedback("Session canceled.");
+      setFeedback("Booking canceled.");
     } catch (error) {
-      setFeedback("Could not cancel that session.");
+      setFeedback("Could not cancel that booking.");
     }
   }
 
-  function stopEditingSession() {
+  function stopEditingBooking() {
     setDraft(null);
     setSelectedBlockId(null);
-    setSelectedSessionId(null);
-    setEditingSessionId(null);
+    setSelectedBookingId(null);
+    setEditingBookingId(null);
     setFeedback(null);
   }
 
@@ -349,25 +461,25 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
         <p className="eyebrow">Client home</p>
         <h1>{client.data?.fields.fullName ?? "Your booking home"}</h1>
         <p>
-          {provider.data?.fields.displayName ?? "Your provider"} keeps this view current with your relationship-specific
-          rules.
+          {provider.data?.fields.displayName ?? savedAccess.providerName} keeps this view current with your
+          relationship-specific rules.
         </p>
 
-        {nextSession ? (
+        {nextBooking ? (
           <div className="summary-card">
-            <span className="eyebrow">Next confirmed session</span>
-            <strong>{nextSession.fields.slotLabel}</strong>
+            <span className="eyebrow">Next confirmed booking</span>
+            <strong>{nextBooking.fields.slotLabel}</strong>
             <p>
               Arrival window:{" "}
-              {nextSession.fields.earliestStartAt
-                ? `${formatTime(nextSession.fields.earliestStartAt)} to ${formatTime(nextSession.fields.guaranteedStartAt)}`
-                : formatTime(nextSession.fields.guaranteedStartAt)}
+              {nextBooking.fields.earliestStartAt
+                ? `${formatTime(nextBooking.fields.earliestStartAt)} to ${formatTime(nextBooking.fields.guaranteedStartAt)}`
+                : formatTime(nextBooking.fields.guaranteedStartAt)}
             </p>
-            <p>Duration: {formatDuration(nextSession.fields.durationMinutes)}</p>
+            <p>Duration: {formatDuration(nextBooking.fields.durationMinutes)}</p>
           </div>
         ) : null}
 
-        {latestSession ? (
+        {latestBooking ? (
           <div className="summary-card summary-card--accent">
             <span className="eyebrow">Book again</span>
             <strong>{suggestedRebookPrompt}</strong>
@@ -421,20 +533,20 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
                   onChangeDraft: setDraft,
                   onConfirmDraft: () => {
                     void persistDraft(draft, {
-                      sessionId: editingSession?.id ?? null,
+                      bookingId: editingBooking?.fields.bookingRef.id ?? null,
                       resetAfterSave: true,
                       announceSuccess: true,
                     });
                   },
                   onDeleteDraft: () => {
-                    if (editingSession) {
-                      void cancelSelectedSession(editingSession);
+                    if (editingBooking) {
+                      void cancelSelectedBooking(editingBooking);
                       return;
                     }
 
-                    stopEditingSession();
+                    stopEditingBooking();
                   },
-                  isNewDraft: !editingSession,
+                  isNewDraft: !editingBooking,
                 }
               : undefined
           }
@@ -445,23 +557,25 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
               return;
             }
 
-            const previousShape = editingSession
-              ? toSlotShapeFromSession(editingSession)
-              : latestSession
-                ? toSlotShapeFromSession(latestSession)
+            const previousShape = editingBooking
+              ? toSlotShapeFromSavedBooking(editingBooking)
+              : latestBooking
+                ? toSlotShapeFromSavedBooking(latestBooking)
                 : quickShapes[0];
             setFeedback(null);
             setSelectedBlockId(block.id);
-            setSelectedSessionId(null);
+            setSelectedBookingId(null);
             setDraft(createBookingDraftFromBlock(block, client.data.fields.minimumDurationMinutes, previousShape));
           }}
           onSelectSession={(block) => {
-            const sessionRow = block.sessionRef?.id ? sessions.rows.find((row) => row.id === block.sessionRef?.id) ?? null : null;
-            if (!sessionRow) {
+            const bookingRow = block.bookingRef?.id
+              ? activeBookings.find((row) => row.fields.bookingRef.id === block.bookingRef?.id) ?? null
+              : null;
+            if (!bookingRow) {
               return;
             }
 
-            startEditingSession(sessionRow);
+            startEditingBooking(bookingRow);
           }}
         />
       </section>
@@ -469,11 +583,11 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
       <aside className="panel">
         {draft ? (
           <>
-            <p className="eyebrow">{editingSession ? "Edit session" : "Booking draft"}</p>
+            <p className="eyebrow">{editingBooking ? "Edit booking" : "Booking draft"}</p>
             <h2>
               {selectedBlock?.state === "maybe"
                 ? "Flexible arrival slot"
-                : editingSession
+                : editingBooking
                   ? "Update booking"
                   : "Confirm booking"}
             </h2>
@@ -481,11 +595,11 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
               {selectedBlock
                 ? selectedBlock.state === "maybe"
                   ? `Drag the booking directly on the planner. Arrival can start from ${formatTime(selectedBlock.startsAt)} if traffic is light, with a guaranteed start from ${formatTime(selectedBlock.guaranteedStartAt ?? selectedBlock.startsAt)}.`
-                  : editingSession
+                  : editingBooking
                     ? "Adjust the booking on the planner, then save it or delete it from the draft controls."
                     : "Drag the booking directly on the planner, then save it from the draft card."
-                : editingSession
-                  ? "Pick an open slot below to move this session, then drag it on the planner if you want to fine-tune the time."
+                : editingBooking
+                  ? "Pick an open slot below to move this booking, then drag it on the planner if you want to fine-tune the time."
                   : "Use the draft on the planner to save this booking. Pick an open slot first if you want to drag it."}
             </p>
             <div className="summary-card">
@@ -499,63 +613,74 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
               <p>Duration: {formatDuration(draft.durationMinutes)}</p>
             </div>
             <div className="row-actions">
-              <button className="button button--ghost" onClick={() => stopEditingSession()} type="button">
+              <button className="button button--ghost" onClick={() => stopEditingBooking()} type="button">
                 Keep current booking
               </button>
-              {editingSession ? (
+              {editingBooking ? (
                 <button
                   className="button button--ghost"
                   onClick={() => {
-                    void cancelSelectedSession(editingSession);
+                    void cancelSelectedBooking(editingBooking);
                   }}
                   type="button"
                 >
-                  Cancel session
+                  Cancel booking
                 </button>
               ) : null}
             </div>
           </>
         ) : null}
 
-        {editingSession && !draft ? (
+        {editingBooking && !draft ? (
           <>
-            <p className="eyebrow">Edit session</p>
+            <p className="eyebrow">Edit booking</p>
             <h2>Choose a replacement slot</h2>
-            <p>Open blocks below already reflect the same booking limits this client can use when creating a session.</p>
+            <p>Open blocks below already reflect the same booking limits this client can use when creating a booking.</p>
             <div className="summary-card">
-              <span className="eyebrow">Current session</span>
-              <strong>{editingSession.fields.slotLabel}</strong>
+              <span className="eyebrow">Current booking</span>
+              <strong>{editingBooking.fields.slotLabel}</strong>
               <p>
-                {formatTime(editingSession.fields.earliestStartAt ?? editingSession.fields.guaranteedStartAt)}
+                {formatTime(editingBooking.fields.earliestStartAt ?? editingBooking.fields.guaranteedStartAt)}
                 {" - "}
-                {formatTime(
-                  editingSession.fields.guaranteedStartAt + editingSession.fields.durationMinutes * 60 * 1000,
-                )}
+                {formatTime(editingBooking.fields.endsAt)}
               </p>
-              <p>Duration: {formatDuration(editingSession.fields.durationMinutes)}</p>
+              <p>Duration: {formatDuration(editingBooking.fields.durationMinutes)}</p>
             </div>
             <div className="row-actions">
-              <button className="button button--ghost" onClick={() => stopEditingSession()} type="button">
+              <button className="button button--ghost" onClick={() => stopEditingBooking()} type="button">
                 Keep current booking
               </button>
               <button
                 className="button button--ghost"
                 onClick={() => {
-                  void cancelSelectedSession(editingSession);
+                  void cancelSelectedBooking(editingBooking);
                 }}
                 type="button"
               >
-                Cancel session
+                Cancel booking
               </button>
             </div>
           </>
         ) : null}
 
-        {!editingSession && !draft ? (
+        {!editingBooking && !draft ? (
           <>
             <p className="eyebrow">How this works</p>
             <h2>Book within open provider hours</h2>
             <p>Open slots already include the travel buffer configured for your account. Choose a start time and visit length.</p>
+            {selectedBooking || latestBooking ? (
+              <div className="row-actions">
+                {selectedBooking ? (
+                  <button className="button button--ghost" onClick={() => draftSuggestedRebooking(selectedBooking)} type="button">
+                    Book this time next week
+                  </button>
+                ) : latestBooking ? (
+                  <button className="button button--ghost" onClick={() => draftSuggestedRebooking(latestBooking)} type="button">
+                    Rebook last visit
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </>
         ) : null}
       </aside>

@@ -4,10 +4,9 @@ const CLIENT_ACCESS_PREFERENCE_KEY = "client-access";
 
 export interface ClientWorkspaceAccess {
   clientId: string;
+  clientBaseUrl: string;
   clientName: string;
-  providerId: string;
   providerName: string;
-  providerBaseUrl: string;
   lastOpenedAt: number;
 }
 
@@ -19,10 +18,9 @@ function isClientWorkspaceAccess(value: unknown): value is ClientWorkspaceAccess
   const candidate = value as Partial<ClientWorkspaceAccess>;
   return (
     typeof candidate.clientId === "string" &&
+    typeof candidate.clientBaseUrl === "string" &&
     typeof candidate.clientName === "string" &&
-    typeof candidate.providerId === "string" &&
     typeof candidate.providerName === "string" &&
-    typeof candidate.providerBaseUrl === "string" &&
     typeof candidate.lastOpenedAt === "number"
   );
 }
@@ -31,12 +29,8 @@ function sortByLastOpenedAt(entries: ClientWorkspaceAccess[]) {
   return [...entries].sort((left, right) => right.lastOpenedAt - left.lastOpenedAt);
 }
 
-export function buildClientHomePath(access: Pick<ClientWorkspaceAccess, "clientId" | "providerId" | "providerBaseUrl">) {
-  const searchParams = new URLSearchParams({
-    providerId: access.providerId,
-    providerBaseUrl: access.providerBaseUrl,
-  });
-  return `/client/${access.clientId}?${searchParams.toString()}`;
+export function buildClientHomePath(access: Pick<ClientWorkspaceAccess, "clientId">) {
+  return `/client/${access.clientId}`;
 }
 
 export async function loadClientAccessList() {
@@ -64,12 +58,7 @@ export async function saveClientAccess(
   const nextEntries = sortByLastOpenedAt([
     nextEntry,
     ...existing.filter(
-      (entry) =>
-        !(
-          entry.clientId === nextEntry.clientId &&
-          entry.providerId === nextEntry.providerId &&
-          entry.providerBaseUrl === nextEntry.providerBaseUrl
-        ),
+      (entry) => !(entry.clientId === nextEntry.clientId && entry.clientBaseUrl === nextEntry.clientBaseUrl),
     ),
   ]);
 

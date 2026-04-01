@@ -69,7 +69,7 @@ export function HomeRoute({ session }: HomeRouteProps) {
 
         <section className="stack">
           {clientAccessList.map((access) => (
-            <div className="summary-card" key={`${access.providerBaseUrl}:${access.providerId}:${access.clientId}`}>
+            <div className="summary-card" key={`${access.clientBaseUrl}:${access.clientId}`}>
               <span className="eyebrow">{access.providerName}</span>
               <strong>{access.clientName}</strong>
               <p>Open this relationship-specific booking view.</p>
