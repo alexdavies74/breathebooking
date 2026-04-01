@@ -273,6 +273,7 @@ select {
 
 .week-block--editable {
   cursor: pointer;
+  padding-top: 1.35rem;
 }
 
 .week-block--available {
@@ -352,6 +353,7 @@ select {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.7);
   pointer-events: none;
+  z-index: 3;
 }
 
 .week-block__drag-handle--top {
@@ -370,12 +372,14 @@ select {
 }
 
 .week-block__drag-surface {
+  position: relative;
+  z-index: 1;
   display: grid;
   gap: 0.25rem;
   align-content: start;
   width: 100%;
   flex: 1;
-  padding: 0.1rem 0.8rem 1.2rem;
+  padding: 1.55rem 0.8rem 1.2rem;
   border: none;
   background: transparent;
   color: inherit;
@@ -385,11 +389,14 @@ select {
 }
 
 .week-block__draft-actions {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.45rem;
   display: flex;
   flex-direction: row;
-  gap: 0.25rem;
-  padding: 1.5rem 0.6rem 0.25rem;
-  z-index: 1;
+  gap: 0.15rem;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .week-block__draft-save,
@@ -402,6 +409,7 @@ select {
   padding: 0.15rem 0.25rem;
   opacity: 0.85;
   line-height: 1;
+  pointer-events: auto;
 }
 
 .week-block__draft-save {
