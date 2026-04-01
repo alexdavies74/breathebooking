@@ -10,7 +10,7 @@ export function LandingRoute({ session }: LandingRouteProps) {
     <div className="hero">
       <div className="hero__copy">
         <p className="eyebrow">Doula Booking</p>
-        <h1>Long-form postpartum scheduling without a backend.</h1>
+        <h1>Free and easy postpartum scheduling.</h1>
         <p>
           Breathe Booking uses Vennbase for collaborative data and Puter for account identity and lightweight
           app preferences. Providers manage a small roster, and clients book against real relationship-specific
@@ -35,9 +35,9 @@ export function LandingRoute({ session }: LandingRouteProps) {
       </div>
       <div className="hero__panel">
         <div className="stat-card">
-          <span className="eyebrow">Core promise</span>
-          <strong>No custom backend</strong>
-          <p>Client auth, invites, booking state, and slot isolation all stay in the browser app.</p>
+          <span className="eyebrow">Free, open-source software</span>
+          <strong>No warranty. No expensive contract.</strong>
+          <p>Your data is processed securely on Puter. With heavy use, you may need to upgrade Puter.</p>
         </div>
         <div className="stat-card">
           <span className="eyebrow">Week view</span>
