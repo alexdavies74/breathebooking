@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -104,6 +104,25 @@ function createSessionRow(id: string, guaranteedStartAt: number) {
       slotLabel: `${formatDayLabel(guaranteedStartAt)} · ${formatTime(guaranteedStartAt)}`,
     },
   };
+}
+
+function setCanvasRect(container: HTMLElement) {
+  container.querySelectorAll(".day-column__canvas").forEach((canvas) => {
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        top: 0,
+        left: 0,
+        right: 180,
+        bottom: 720,
+        width: 180,
+        height: 720,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    });
+  });
 }
 
 describe("ClientHomeRoute", () => {
@@ -217,7 +236,7 @@ describe("ClientHomeRoute", () => {
     expect(screen.queryByLabelText("Start")).toBeNull();
     expect(screen.queryByLabelText("End")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    await user.click(screen.getByRole("button", { name: "Save booking" }));
 
     expect(mocks.createSessionBooking).toHaveBeenCalledTimes(1);
   });
@@ -321,7 +340,7 @@ describe("ClientHomeRoute", () => {
     }
   });
 
-  it("updates a selected session from the client planner", async () => {
+  it("saves edits to an existing session from the client planner", async () => {
     const user = userEvent.setup();
     mocks.updateSessionBooking.mockResolvedValue({});
     const sessionStartAt = new Date("2026-03-30T10:00:00").getTime();
@@ -366,7 +385,7 @@ describe("ClientHomeRoute", () => {
       return { rows: [] };
     });
 
-    render(
+    const { container } = render(
       <MemoryRouter initialEntries={["/client/client-1?providerId=provider-1&providerBaseUrl=https%3A%2F%2Fapi.puter.com"]}>
         <Routes>
           <Route path="/client/:clientId" element={<ClientHomeRoute session={createSession() as never} />} />
@@ -374,15 +393,25 @@ describe("ClientHomeRoute", () => {
       </MemoryRouter>,
     );
 
+    setCanvasRect(container);
+
     const sessionLabel = `${formatDayLabel(sessionStartAt)} · ${formatTime(sessionStartAt)}`;
     await user.click(screen.getByRole("button", { name: new RegExp(escapeForRegExp(sessionLabel)) }));
-    await user.click(screen.getByRole("button", { name: "Update" }));
+
+    expect(screen.getByRole("button", { name: "Save booking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete booking" })).toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Move booking" }), { clientY: 240 });
+    fireEvent.pointerMove(window, { clientY: 225 });
+    fireEvent.pointerUp(window);
+
+    await user.click(screen.getByRole("button", { name: "Save booking" }));
 
     expect(mocks.updateSessionBooking).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({ id: "session-1" }),
         draft: expect.objectContaining({
-          guaranteedStartAt: sessionStartAt,
+          guaranteedStartAt: sessionStartAt - 30 * 60 * 1000,
           durationMinutes: 180,
         }),
       }),

@@ -311,13 +311,28 @@ select {
 }
 
 .week-block--draft {
-  background: rgba(36, 32, 26, 0.92);
   color: white;
-  border-color: rgba(255, 255, 255, 0.2);
   display: flex;
   flex-direction: column;
   padding: 0;
   gap: 0;
+  backdrop-filter: blur(12px);
+}
+
+.week-block--draft-existing {
+  background: rgba(36, 32, 26, 0.92);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 12px 28px rgba(27, 19, 13, 0.22);
+}
+
+.week-block--draft-new {
+  background: rgba(36, 32, 26, 0.74);
+  border-style: dashed;
+  border-width: 1px;
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 18px 40px rgba(27, 19, 13, 0.12);
+  opacity: 0.88;
+  filter: saturate(0.92);
 }
 
 .week-block--draft-availability {
@@ -382,11 +397,15 @@ select {
   background: none;
   border: none;
   color: inherit;
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   cursor: pointer;
   padding: 0.15rem 0.25rem;
   opacity: 0.85;
   line-height: 1;
+}
+
+.week-block__draft-save {
+  font-size: 1rem;
 }
 
 .range-editor,

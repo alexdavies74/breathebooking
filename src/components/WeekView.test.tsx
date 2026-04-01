@@ -39,7 +39,7 @@ function buildEditableBlock(dayKey: string): WeekBlock {
   };
 }
 
-function buildDraft(dayKey: string): ProviderRangeDraft {
+function buildDraft(dayKey: string, isNew = false): ProviderRangeDraft {
   const dayStart = new Date(`${dayKey}T00:00:00`).getTime();
   return {
     id: "draft-1",
@@ -50,7 +50,7 @@ function buildDraft(dayKey: string): ProviderRangeDraft {
     weekday: new Date(dayStart).getDay(),
     startMinutes: 9 * 60,
     endMinutes: 13 * 60,
-    isNew: false,
+    isNew,
   };
 }
 
@@ -132,7 +132,7 @@ describe("WeekView", () => {
     expect(onExtendHorizon).toHaveBeenCalledWith(14);
   });
 
-  it("creates a provider draft from empty space and saves or deletes the active draft", async () => {
+  it("creates a provider draft from empty space and shows save controls for both new and existing drafts", async () => {
     const user = userEvent.setup();
     const dayKey = toDayKey(Date.now());
     const onCreateDraft = vi.fn();
@@ -172,6 +172,27 @@ describe("WeekView", () => {
         horizonDays={1}
         providerEdit={{
           mode: "availability",
+          draft: buildDraft(dayKey, true),
+          onCreateDraft,
+          onEditBlock,
+          onChangeDraft,
+          onSaveDraft,
+          onDeleteDraft,
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Save range" }));
+
+    expect(onSaveDraft).toHaveBeenCalled();
+
+    rerender(
+      <WeekView
+        role="provider"
+        blocks={[buildEditableBlock(dayKey)]}
+        horizonDays={1}
+        providerEdit={{
+          mode: "availability",
           draft: buildDraft(dayKey),
           onCreateDraft,
           onEditBlock,
@@ -182,10 +203,9 @@ describe("WeekView", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByRole("button", { name: "Save range" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete range" }));
 
-    expect(onSaveDraft).toHaveBeenCalled();
     expect(onDeleteDraft).toHaveBeenCalled();
   });
 
@@ -229,7 +249,7 @@ describe("WeekView", () => {
     expect(onChangeDraft.mock.calls.some(([draft]) => draft.endMinutes !== 13 * 60)).toBe(true);
   });
 
-  it("updates client booking drafts in the planner and confirms inline", async () => {
+  it("updates new client booking drafts in the planner and saves inline", async () => {
     const user = userEvent.setup();
     const dayKey = toDayKey(Date.now());
     const onChangeDraft = vi.fn();
@@ -252,6 +272,8 @@ describe("WeekView", () => {
           },
           onChangeDraft,
           onConfirmDraft,
+          onDeleteDraft: vi.fn(),
+          isNewDraft: true,
         }}
       />,
     );
@@ -266,7 +288,7 @@ describe("WeekView", () => {
     fireEvent.pointerMove(window, { clientY: 315 });
     fireEvent.pointerUp(window);
 
-    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    await user.click(screen.getByRole("button", { name: "Save booking" }));
 
     expect(onChangeDraft).toHaveBeenCalled();
     expect(onChangeDraft.mock.calls.some(([draft]) => draft.guaranteedStartAt !== buildBookingDraft(dayKey).guaranteedStartAt)).toBe(
@@ -274,5 +296,36 @@ describe("WeekView", () => {
     );
     expect(onChangeDraft.mock.calls.some(([draft]) => draft.endsAt !== buildBookingDraft(dayKey).endsAt)).toBe(true);
     expect(onConfirmDraft).toHaveBeenCalled();
+  });
+
+  it("shows save and delete controls when editing an existing booking", () => {
+    const dayKey = toDayKey(Date.now());
+    const onDeleteDraft = vi.fn();
+
+    render(
+      <WeekView
+        role="client"
+        blocks={[buildEditableBlock(dayKey)]}
+        selectedDraft={buildBookingDraft(dayKey)}
+        horizonDays={1}
+        bookingEdit={{
+          draft: buildBookingDraft(dayKey),
+          bounds: {
+            dayKey,
+            dayStart: new Date(`${dayKey}T00:00:00`).getTime(),
+            minStartMinutes: 9 * 60,
+            maxEndMinutes: 13 * 60,
+            minDurationMinutes: 60,
+          },
+          onChangeDraft: vi.fn(),
+          onConfirmDraft: vi.fn(),
+          onDeleteDraft,
+          isNewDraft: false,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Save booking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete booking" })).toBeInTheDocument();
   });
 });

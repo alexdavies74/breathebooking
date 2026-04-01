@@ -41,7 +41,8 @@ interface BookingEditConfig {
   bounds?: BookingEditBounds | null;
   onChangeDraft(next: BookingDraft): void;
   onConfirmDraft(): void;
-  confirmLabel?: string;
+  onDeleteDraft?(): void;
+  isNewDraft?: boolean;
 }
 
 interface WeekViewProps {
@@ -367,6 +368,7 @@ export function WeekView({
         const dayStart = today + index * 86400000;
         const dayBlocks = (grouped.get(dayKey) ?? []).sort((left, right) => left.startsAt - right.startsAt);
         const bookingDraft = bookingEdit?.draft?.dayKey === dayKey ? bookingEdit.draft : null;
+        const isNewBookingDraft = bookingDraft ? bookingEdit?.isNewDraft !== false : false;
         const draftForDay = bookingDraft ?? (selectedDraft?.dayKey === dayKey ? selectedDraft : null);
         const bookingBounds = bookingEdit?.bounds?.dayKey === dayKey ? bookingEdit.bounds : null;
         const editConfig = providerEdit;
@@ -444,7 +446,10 @@ export function WeekView({
               })}
 
               {draftForDay ? (
-                <div className="week-block week-block--draft" style={blockPosition(draftForDay)}>
+                <div
+                  className={`week-block week-block--draft${isNewBookingDraft ? " week-block--draft-new" : " week-block--draft-existing"}`}
+                  style={blockPosition(draftForDay)}
+                >
                   {bookingDraft && bookingBounds ? (
                     <>
                       <button
@@ -462,8 +467,21 @@ export function WeekView({
                         type="button"
                       />
                       <div className="week-block__draft-actions">
-                        <button className="week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
-                          ✓
+                        <button
+                          aria-label="Save booking"
+                          className="week-block__draft-save"
+                          onClick={() => bookingEdit?.onConfirmDraft()}
+                          type="button"
+                        >
+                          💾
+                        </button>
+                        <button
+                          aria-label={isNewBookingDraft ? "Discard booking" : "Delete booking"}
+                          className="week-block__draft-delete"
+                          onClick={() => bookingEdit?.onDeleteDraft?.()}
+                          type="button"
+                        >
+                          ✕
                         </button>
                       </div>
                       <button
@@ -512,8 +530,21 @@ export function WeekView({
                       </small>
                       {bookingDraft ? (
                         <div className="week-block__draft-actions">
-                          <button className="week-block__draft-save" onClick={() => bookingEdit?.onConfirmDraft()} type="button">
-                            ✓
+                          <button
+                            aria-label="Save booking"
+                            className="week-block__draft-save"
+                            onClick={() => bookingEdit?.onConfirmDraft()}
+                            type="button"
+                          >
+                            💾
+                          </button>
+                          <button
+                            aria-label={isNewBookingDraft ? "Discard booking" : "Delete booking"}
+                            className="week-block__draft-delete"
+                            onClick={() => bookingEdit?.onDeleteDraft?.()}
+                            type="button"
+                          >
+                            ✕
                           </button>
                         </div>
                       ) : null}
@@ -524,7 +555,7 @@ export function WeekView({
 
               {providerDraft && editConfig ? (
                 <div
-                  className={`week-block week-block--draft week-block--draft-${providerDraft.sourceKind}`}
+                  className={`week-block week-block--draft week-block--draft-${providerDraft.sourceKind}${providerDraft.isNew ? " week-block--draft-new" : " week-block--draft-existing"}`}
                   style={draftPosition(providerDraft)}
                 >
                   <button
@@ -536,18 +567,22 @@ export function WeekView({
                     type="button"
                   />
                   <div className="week-block__draft-actions">
-                    <button className="week-block__draft-save" onClick={() => editConfig.onSaveDraft()} type="button">
-                      ✓
+                    <button
+                      aria-label="Save range"
+                      className="week-block__draft-save"
+                      onClick={() => editConfig.onSaveDraft()}
+                      type="button"
+                    >
+                      💾
                     </button>
-                    {!providerDraft.isNew ? (
-                      <button
-                        className="week-block__draft-delete"
-                        onClick={() => editConfig.onDeleteDraft()}
-                        type="button"
-                      >
-                        ✕
-                      </button>
-                    ) : null}
+                    <button
+                      aria-label={providerDraft.isNew ? "Discard range" : "Delete range"}
+                      className="week-block__draft-delete"
+                      onClick={() => editConfig.onDeleteDraft()}
+                      type="button"
+                    >
+                      ✕
+                    </button>
                   </div>
                   <button
                     aria-label="Move range"

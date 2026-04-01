@@ -208,10 +208,15 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     setEditingSessionId(null);
   }
 
-  async function confirmDraft(nextDraft: NonNullable<typeof draft>, sessionToEdit: typeof editingSession = editingSession) {
+  async function persistDraft(
+    nextDraft: NonNullable<typeof draft>,
+    options: { sessionId?: string | null; resetAfterSave: boolean; announceSuccess: boolean },
+  ) {
     if (!provider.data || !client.data) {
       return;
     }
+
+    const sessionToEdit = options.sessionId ? sessions.rows.find((row) => row.id === options.sessionId) ?? null : null;
 
     try {
       if (sessionToEdit) {
@@ -222,8 +227,12 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
           draft: nextDraft,
           bookedByRole: "client",
         });
-        resetBookingSelection();
-        setFeedback("Updated. Your session now reflects the new slot.");
+
+        if (options.resetAfterSave) {
+          resetBookingSelection();
+        } else if (options.announceSuccess) {
+          setFeedback("Saved. Your session now reflects the new slot.");
+        }
         return;
       }
 
@@ -234,7 +243,9 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
         bookedByRole: "client",
       });
 
-      resetBookingSelection();
+      if (options.resetAfterSave) {
+        resetBookingSelection();
+      }
       setFeedback("Booked. Your session now shows an arrival window and duration instead of a fixed end time.");
     } catch (error) {
       setFeedback(sessionToEdit ? "Could not update that session." : "Could not book that session.");
@@ -255,7 +266,7 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     }
 
     const nextDraft = createBookingDraftFromBlock(slot, client.data.fields.minimumDurationMinutes);
-    await confirmDraft(nextDraft, null);
+    await persistDraft(nextDraft, { sessionId: null, resetAfterSave: true, announceSuccess: true });
   }
 
   function draftSuggestedRebooking(sessionRow: NonNullable<typeof selectedSession | typeof latestSession>) {
@@ -303,13 +314,11 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
     }
 
     setSelectedBlockId(matchingBlock.id);
-    setDraft(
-      createBookingDraftFromBlock(
-        matchingBlock,
-        client.data.fields.minimumDurationMinutes,
-        toSlotShapeFromSession(sessionRow),
-      ),
-    );
+    setDraft(createBookingDraftFromBlock(
+      matchingBlock,
+      client.data.fields.minimumDurationMinutes,
+      toSlotShapeFromSession(sessionRow),
+    ));
   }
 
   async function cancelSelectedSession(sessionRow: NonNullable<typeof selectedSession>) {
@@ -411,9 +420,21 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
                   bounds: bookingBounds,
                   onChangeDraft: setDraft,
                   onConfirmDraft: () => {
-                    void confirmDraft(draft);
+                    void persistDraft(draft, {
+                      sessionId: editingSession?.id ?? null,
+                      resetAfterSave: true,
+                      announceSuccess: true,
+                    });
                   },
-                  confirmLabel: editingSession ? "Update" : "Confirm",
+                  onDeleteDraft: () => {
+                    if (editingSession) {
+                      void cancelSelectedSession(editingSession);
+                      return;
+                    }
+
+                    stopEditingSession();
+                  },
+                  isNewDraft: !editingSession,
                 }
               : undefined
           }
@@ -461,11 +482,11 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
                 ? selectedBlock.state === "maybe"
                   ? `Drag the booking directly on the planner. Arrival can start from ${formatTime(selectedBlock.startsAt)} if traffic is light, with a guaranteed start from ${formatTime(selectedBlock.guaranteedStartAt ?? selectedBlock.startsAt)}.`
                   : editingSession
-                    ? "Drag the booking directly on the planner to keep this session within an open slot."
-                    : "Drag the booking directly on the planner to adjust start time and length within this open window."
+                    ? "Adjust the booking on the planner, then save it or delete it from the draft controls."
+                    : "Drag the booking directly on the planner, then save it from the draft card."
                 : editingSession
                   ? "Pick an open slot below to move this session, then drag it on the planner if you want to fine-tune the time."
-                  : "Use the draft on the planner to confirm this booking. Pick an open slot first if you want to drag it."}
+                  : "Use the draft on the planner to save this booking. Pick an open slot first if you want to drag it."}
             </p>
             <div className="summary-card">
               <span className="eyebrow">Selected time</span>

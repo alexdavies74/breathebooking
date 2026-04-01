@@ -173,41 +173,44 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
     );
   }
 
-  async function saveProviderDraft() {
+  async function persistProviderDraft(
+    draftToSave: ProviderRangeDraft,
+    options: { clearDraftAfterSave: boolean; announceSuccess: boolean },
+  ) {
     const activeProvider = provider;
-    if (!activeProvider || !providerDraft) {
+    if (!activeProvider) {
       return;
     }
 
     try {
-      if (providerDraft.sourceKind === "availability") {
-        if (providerDraft.isNew) {
+      if (draftToSave.sourceKind === "availability") {
+        if (draftToSave.isNew) {
           await createBaseAvailabilityWindow({
             provider: activeProvider,
-            weekday: providerDraft.weekday,
-            startMinutes: providerDraft.startMinutes,
-            endMinutes: providerDraft.endMinutes,
+            weekday: draftToSave.weekday,
+            startMinutes: draftToSave.startMinutes,
+            endMinutes: draftToSave.endMinutes,
           });
-        } else if (providerDraft.sourceId) {
-          const window = availabilityById.get(providerDraft.sourceId);
+        } else if (draftToSave.sourceId) {
+          const window = availabilityById.get(draftToSave.sourceId);
           if (!window) {
             setClientStatus("That availability window is no longer available to edit.");
             return;
           }
 
           await updateBaseAvailabilityWindow(window, {
-            startMinutes: providerDraft.startMinutes,
-            endMinutes: providerDraft.endMinutes,
+            startMinutes: draftToSave.startMinutes,
+            endMinutes: draftToSave.endMinutes,
           });
         }
-      } else if (providerDraft.isNew) {
+      } else if (draftToSave.isNew) {
         await createPersonalBlock({
           provider: activeProvider,
-          startsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.startMinutes),
-          endsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.endMinutes),
+          startsAt: timestampFromDayAndMinutes(draftToSave.dayStart, draftToSave.startMinutes),
+          endsAt: timestampFromDayAndMinutes(draftToSave.dayStart, draftToSave.endMinutes),
         });
-      } else if (providerDraft.sourceId) {
-        const block = personalBlocksById.get(providerDraft.sourceId);
+      } else if (draftToSave.sourceId) {
+        const block = personalBlocksById.get(draftToSave.sourceId);
         if (!block) {
           setClientStatus("That personal block is no longer available to edit.");
           return;
@@ -216,15 +219,20 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
         await updatePersonalBlock({
           provider: activeProvider,
           block,
-          startsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.startMinutes),
-          endsAt: timestampFromDayAndMinutes(providerDraft.dayStart, providerDraft.endMinutes),
+          startsAt: timestampFromDayAndMinutes(draftToSave.dayStart, draftToSave.startMinutes),
+          endsAt: timestampFromDayAndMinutes(draftToSave.dayStart, draftToSave.endMinutes),
         });
       }
 
-      setClientStatus(`${providerEditMode === "availability" ? "Availability" : "Personal block"} saved.`);
-      setProviderDraft(null);
+      if (options.announceSuccess) {
+        setClientStatus(`${draftToSave.sourceKind === "availability" ? "Availability" : "Personal block"} saved.`);
+      }
+
+      if (options.clearDraftAfterSave) {
+        setProviderDraft((currentDraft) => (currentDraft?.id === draftToSave.id ? null : currentDraft));
+      }
     } catch (error) {
-      setClientStatus(`Could not save that ${providerEditMode === "availability" ? "availability range" : "personal block"}.`);
+      setClientStatus(`Could not save that ${draftToSave.sourceKind === "availability" ? "availability range" : "personal block"}.`);
     }
   }
 
@@ -285,7 +293,7 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
           </div>
           <p>
             Click empty space to create a {providerEditMode === "availability" ? "weekly availability window" : "personal block"}.
-            Click an existing {providerEditMode === "availability" ? "window" : "block"} to edit it inline.
+            Use the draft controls to save changes, discard a new range, or delete an existing one.
           </p>
           {clientStatus ? <div className="status-banner">{clientStatus}</div> : null}
         </div>
@@ -320,7 +328,12 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
             },
             onChangeDraft: setProviderDraft,
             onSaveDraft: () => {
-              void saveProviderDraft();
+              if (providerDraft) {
+                void persistProviderDraft(providerDraft, {
+                  clearDraftAfterSave: true,
+                  announceSuccess: true,
+                });
+              }
             },
             onDeleteDraft: () => {
               void deleteProviderDraft();

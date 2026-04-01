@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ProviderDashboardRoute } from "./ProviderDashboardRoute";
 import { ProviderClientSettingsRoute } from "./ProviderClientSettingsRoute";
+import { toDayKey } from "../domain/date";
 
 const mocks = vi.hoisted(() => ({
   useCurrentUser: vi.fn(),
@@ -117,6 +118,25 @@ function createClientRow() {
   };
 }
 
+function setCanvasRect(container: HTMLElement) {
+  container.querySelectorAll(".day-column__canvas").forEach((canvas) => {
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        top: 0,
+        left: 0,
+        right: 180,
+        bottom: 720,
+        width: 180,
+        height: 720,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    });
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   useCurrentUser.mockReturnValue({ data: { username: "owner" } });
@@ -202,5 +222,73 @@ describe("provider routes", () => {
     );
     expect(screen.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
     expect(await screen.findByAltText("Invite QR code")).toBeInTheDocument();
+  });
+
+  it("saves edits to existing provider ranges from the save button", async () => {
+    const user = userEvent.setup();
+    const dayKey = toDayKey(Date.now());
+
+    buildProviderWeekBlocks.mockReturnValue([
+      {
+        id: "availability-1",
+        dayKey,
+        startsAt: new Date(`${dayKey}T09:00:00`).getTime(),
+        endsAt: new Date(`${dayKey}T13:00:00`).getTime(),
+        state: "available",
+        interactive: true,
+        label: "Open",
+        sourceKind: "availability",
+        sourceId: "window-1",
+        weekday: new Date(`${dayKey}T00:00:00`).getDay(),
+      },
+    ] as never);
+    useQuery.mockImplementation((_db: unknown, collection: string) => {
+      if (collection === "clients") {
+        return { rows: [createClientRow()] };
+      }
+
+      if (collection === "baseAvailabilityWindows") {
+        return {
+          rows: [
+            {
+              id: "window-1",
+              fields: {
+                weekday: new Date(`${dayKey}T00:00:00`).getDay(),
+                startMinutes: 9 * 60,
+                endMinutes: 13 * 60,
+              },
+            },
+          ],
+        };
+      }
+
+      return { rows: [] };
+    });
+    updateBaseAvailabilityWindow.mockResolvedValue({});
+
+    const { container } = render(
+      <MemoryRouter initialEntries={["/provider"]}>
+        <Routes>
+          <Route path="/provider" element={<ProviderDashboardRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    setCanvasRect(container);
+
+    await user.click(screen.getByText("Open"));
+
+    expect(screen.getByRole("button", { name: "Save range" })).toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Move range" }), { clientY: 405 });
+    fireEvent.pointerMove(window, { clientY: 450 });
+    fireEvent.pointerUp(window);
+
+    await user.click(screen.getByRole("button", { name: "Save range" }));
+
+    expect(updateBaseAvailabilityWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "window-1" }),
+      expect.objectContaining({ startMinutes: 10 * 60, endMinutes: 14 * 60 }),
+    );
   });
 });
