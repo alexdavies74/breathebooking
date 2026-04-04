@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
-import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
 import { useSavedRow } from "@vennbase/react";
 import { buildClientHomePath, loadClientAccessList, type ClientWorkspaceAccess } from "../lib/clientAccess";

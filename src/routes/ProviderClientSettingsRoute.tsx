@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
 import { useCurrentUser, useQuery, useRow, useSavedRow, useShareLink } from "@vennbase/react";
 import QRCode from "qrcode";

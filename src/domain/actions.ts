@@ -36,6 +36,22 @@ const DEFAULT_PROVIDER_WINDOWS = [
   { weekday: 5, startMinutes: 14 * 60, endMinutes: 19 * 60, status: "active", sortKey: 5140 },
 ];
 
+function reportBackgroundWriteError(action: string, error: unknown) {
+  console.error(`Background Vennbase write failed during ${action}.`, error);
+}
+
+function settleReceiptInBackground<T>(action: string, receipt: { committed: Promise<T> }) {
+  void receipt.committed.catch((error) => {
+    reportBackgroundWriteError(action, error);
+  });
+}
+
+function settlePromiseInBackground(action: string, promise: Promise<unknown>) {
+  void promise.catch((error) => {
+    reportBackgroundWriteError(action, error);
+  });
+}
+
 function bookingRootRefFromProvider(provider: ProviderRow): RowRef<"bookingRoots"> {
   const link = provider.fields.bookingSubmitterLink;
   if (!link) {
@@ -132,7 +148,7 @@ async function findBookingBlock(bookingRootRef: RowRef<"bookingRoots">, originRe
   return rows.find((row) => row.fields.originRef === originRef) ?? null;
 }
 
-export async function createPractice(displayName: string, timezone: string, ownerUsername: string) {
+export function createPractice(displayName: string, timezone: string, ownerUsername: string) {
   const providerWrite = db.create("providers", {
     displayName,
     timezone,
@@ -140,70 +156,77 @@ export async function createPractice(displayName: string, timezone: string, owne
     defaultWeekHorizon: 4,
   });
   const provider = providerWrite.value;
-  await providerWrite.committed;
 
   const privateRootWrite = db.create("providerPrivateRoots", {
     providerRef: provider.ref,
     createdAt: Date.now(),
   });
   const privateRoot = privateRootWrite.value;
-  await privateRootWrite.committed;
 
   const bookingRootWrite = db.create("bookingRoots", {
     providerRef: provider.ref,
     createdAt: Date.now(),
   });
   const bookingRoot = bookingRootWrite.value;
-  await bookingRootWrite.committed;
 
-  const bookingSubmitterLink = await db.createShareLink(bookingRoot.ref, "submitter").committed;
-  const committedProvider = await db
-    .update("providers", provider.ref, {
-      bookingSubmitterLink,
-      privateRootRef: privateRoot.ref,
-    })
-    .committed;
-
-  await Promise.all(
-    DEFAULT_PROVIDER_WINDOWS.map(async (window) => {
-      await db.create("baseAvailabilityWindows", window, { in: committedProvider }).committed;
-    }),
+  const bookingSubmitterLinkWrite = db.createShareLink(bookingRoot.ref, "submitter");
+  const providerUpdateWrite = db.update("providers", provider.ref, {
+    bookingSubmitterLink: bookingSubmitterLinkWrite.value,
+    privateRootRef: privateRoot.ref,
+  });
+  const nextProvider = providerUpdateWrite.value;
+  const defaultWindowWrites = DEFAULT_PROVIDER_WINDOWS.map((window) =>
+    db.create("baseAvailabilityWindows", window, { in: nextProvider }),
   );
 
-  return committedProvider;
+  settleReceiptInBackground("createPractice.providers", providerWrite);
+  settleReceiptInBackground("createPractice.providerPrivateRoots", privateRootWrite);
+  settleReceiptInBackground("createPractice.bookingRoots", bookingRootWrite);
+  settleReceiptInBackground("createPractice.bookingSubmitterLink", bookingSubmitterLinkWrite);
+  settleReceiptInBackground("createPractice.providerUpdate", providerUpdateWrite);
+  defaultWindowWrites.forEach((write, index) => {
+    settleReceiptInBackground(`createPractice.baseAvailabilityWindows.${index}`, write);
+  });
+
+  return nextProvider;
 }
 
-export async function createClient(provider: ProviderRow, input: CreateClientInput) {
-  const privateRoot = await fetchProviderPrivateRoot(provider);
-  const providerViewerLink = await db.createShareLink(provider.ref, "viewer").committed;
+export function createClient(provider: ProviderRow, input: CreateClientInput) {
+  const privateRootRef = provider.fields.privateRootRef;
+  if (!privateRootRef) {
+    throw new Error("Provider is missing a private root.");
+  }
 
-  const client = await db
-    .create(
-      "clients",
-      {
-        fullName: input.fullName,
-        providerViewerLink,
-        status: "active",
-        minimumDurationMinutes: 180,
-        travelTimeMinutes: 30,
-      },
-      { in: privateRoot },
-    )
-    .committed;
+  const providerViewerLinkWrite = db.createShareLink(provider.ref, "viewer");
+  const clientWrite = db.create(
+    "clients",
+    {
+      fullName: input.fullName,
+      providerViewerLink: providerViewerLinkWrite.value,
+      status: "active",
+      minimumDurationMinutes: 180,
+      travelTimeMinutes: 30,
+    },
+    { in: privateRootRef },
+  );
+  const client = clientWrite.value;
+
+  settleReceiptInBackground("createClient.providerViewerLink", providerViewerLinkWrite);
+  settleReceiptInBackground("createClient.client", clientWrite);
 
   return {
     client,
-    inviteLink: await buildClientInviteLink(provider, client),
+    inviteLink: buildClientInviteLink(provider, client),
   };
 }
 
-export async function updateClientSettings(client: ClientRow, input: ClientSettingsInput) {
-  return db
-    .update("clients", client.ref, {
-      minimumDurationMinutes: input.minimumDurationMinutes,
-      travelTimeMinutes: input.travelTimeMinutes,
-    })
-    .committed;
+export function updateClientSettings(client: ClientRow, input: ClientSettingsInput) {
+  const write = db.update("clients", client.ref, {
+    minimumDurationMinutes: input.minimumDurationMinutes,
+    travelTimeMinutes: input.travelTimeMinutes,
+  });
+  settleReceiptInBackground("updateClientSettings", write);
+  return write.value;
 }
 
 export async function createBooking(args: {
@@ -314,47 +337,50 @@ export async function cancelBooking(args: {
   await db.update("savedBookings", args.savedBooking.ref, { status: "canceled" }).committed;
 }
 
-export async function createPersonalBlock(args: {
+export function createPersonalBlock(args: {
   provider: ProviderRow;
   startsAt: number;
   endsAt: number;
   label?: string;
 }) {
-  const privateRoot = await fetchProviderPrivateRoot(args.provider);
+  const privateRootRef = args.provider.fields.privateRootRef;
+  if (!privateRootRef) {
+    throw new Error("Provider is missing a private root.");
+  }
+
   const bookingRootRef = bookingRootRefFromProvider(args.provider);
   const label = args.label ?? "Personal block";
 
-  const block = await db
-    .create(
-      "personalBlocks",
-      {
-        startsAt: args.startsAt,
-        endsAt: args.endsAt,
-        source: "manual",
-        label,
-      },
-      { in: privateRoot },
-    )
-    .committed;
+  const blockWrite = db.create(
+    "personalBlocks",
+    {
+      startsAt: args.startsAt,
+      endsAt: args.endsAt,
+      source: "manual",
+      label,
+    },
+    { in: privateRootRef },
+  );
+  const block = blockWrite.value;
+  const bookingBlockWrite = db.create(
+    "bookingBlocks",
+    {
+      startsAt: args.startsAt,
+      endsAt: args.endsAt,
+      source: "manual",
+      originRef: block.id,
+      label,
+    },
+    { in: bookingRootRef },
+  );
 
-  await db
-    .create(
-      "bookingBlocks",
-      {
-        startsAt: args.startsAt,
-        endsAt: args.endsAt,
-        source: "manual",
-        originRef: block.id,
-        label,
-      },
-      { in: bookingRootRef },
-    )
-    .committed;
+  settleReceiptInBackground("createPersonalBlock.personalBlocks", blockWrite);
+  settleReceiptInBackground("createPersonalBlock.bookingBlocks", bookingBlockWrite);
 
   return block;
 }
 
-export async function updatePersonalBlock(args: {
+export function updatePersonalBlock(args: {
   provider: ProviderRow;
   block: BlockRow;
   startsAt: number;
@@ -364,75 +390,87 @@ export async function updatePersonalBlock(args: {
   const bookingRootRef = bookingRootRefFromProvider(args.provider);
   const label = args.label ?? args.block.fields.label ?? "Personal block";
 
-  const block = await db
-    .update("personalBlocks", args.block.ref, {
-      startsAt: args.startsAt,
-      endsAt: args.endsAt,
-      label,
-    })
-    .committed;
+  const blockWrite = db.update("personalBlocks", args.block.ref, {
+    startsAt: args.startsAt,
+    endsAt: args.endsAt,
+    label,
+  });
+  const block = blockWrite.value;
 
-  const bookingBlock = await findBookingBlock(bookingRootRef, args.block.id);
-  if (bookingBlock) {
-    await db
-      .update("bookingBlocks", bookingBlock.ref, {
-        startsAt: args.startsAt,
-        endsAt: args.endsAt,
-        label,
-      })
-      .committed;
-  }
+  settleReceiptInBackground("updatePersonalBlock.personalBlocks", blockWrite);
+  settlePromiseInBackground(
+    "updatePersonalBlock.bookingBlocks",
+    (async () => {
+      const bookingBlock = await findBookingBlock(bookingRootRef, args.block.id);
+      if (bookingBlock) {
+        await db
+          .update("bookingBlocks", bookingBlock.ref, {
+            startsAt: args.startsAt,
+            endsAt: args.endsAt,
+            label,
+          })
+          .committed;
+      }
+    })(),
+  );
 
   return block;
 }
 
-export async function deactivatePersonalBlock(provider: ProviderRow, block: BlockRow) {
+export function deactivatePersonalBlock(provider: ProviderRow, block: BlockRow) {
   const bookingRootRef = bookingRootRefFromProvider(provider);
-  await db.update("personalBlocks", block.ref, { source: "inactive" }).committed;
+  const write = db.update("personalBlocks", block.ref, { source: "inactive" });
 
-  const bookingBlock = await findBookingBlock(bookingRootRef, block.id);
-  if (bookingBlock) {
-    await bookingBlock.in.remove(bookingRootRef).committed;
-  }
+  settleReceiptInBackground("deactivatePersonalBlock.personalBlocks", write);
+  settlePromiseInBackground(
+    "deactivatePersonalBlock.bookingBlocks",
+    (async () => {
+      const bookingBlock = await findBookingBlock(bookingRootRef, block.id);
+      if (bookingBlock) {
+        await bookingBlock.in.remove(bookingRootRef).committed;
+      }
+    })(),
+  );
+
+  return write.value;
 }
 
-export async function createBaseAvailabilityWindow(args: {
+export function createBaseAvailabilityWindow(args: {
   provider: ProviderRow;
   weekday: number;
   startMinutes: number;
   endMinutes: number;
 }) {
-  return db
-    .create(
-      "baseAvailabilityWindows",
-      {
-        weekday: args.weekday,
-        startMinutes: args.startMinutes,
-        endMinutes: args.endMinutes,
-        status: "active",
-        sortKey: args.weekday * 1000 + args.startMinutes,
-      },
-      { in: args.provider },
-    )
-    .committed;
-}
-
-export async function updateBaseAvailabilityWindow(
-  window: BaseAvailabilityRow,
-  input: { startMinutes: number; endMinutes: number },
-) {
-  return db
-    .update("baseAvailabilityWindows", window.ref, {
-      startMinutes: input.startMinutes,
-      endMinutes: input.endMinutes,
+  const write = db.create(
+    "baseAvailabilityWindows",
+    {
+      weekday: args.weekday,
+      startMinutes: args.startMinutes,
+      endMinutes: args.endMinutes,
       status: "active",
-      sortKey: window.fields.weekday * 1000 + input.startMinutes,
-    })
-    .committed;
+      sortKey: args.weekday * 1000 + args.startMinutes,
+    },
+    { in: args.provider },
+  );
+  settleReceiptInBackground("createBaseAvailabilityWindow", write);
+  return write.value;
 }
 
-export async function deactivateBaseAvailabilityWindow(window: BaseAvailabilityRow) {
-  return db.update("baseAvailabilityWindows", window.ref, { status: "inactive" }).committed;
+export function updateBaseAvailabilityWindow(window: BaseAvailabilityRow, input: { startMinutes: number; endMinutes: number }) {
+  const write = db.update("baseAvailabilityWindows", window.ref, {
+    startMinutes: input.startMinutes,
+    endMinutes: input.endMinutes,
+    status: "active",
+    sortKey: window.fields.weekday * 1000 + input.startMinutes,
+  });
+  settleReceiptInBackground("updateBaseAvailabilityWindow", write);
+  return write.value;
+}
+
+export function deactivateBaseAvailabilityWindow(window: BaseAvailabilityRow) {
+  const write = db.update("baseAvailabilityWindows", window.ref, { status: "inactive" });
+  settleReceiptInBackground("deactivateBaseAvailabilityWindow", write);
+  return write.value;
 }
 
 export async function loadProviderPrivateRoot(provider: ProviderRow) {

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import type { RowHandle } from "@vennbase/core";
 import type { UseSessionResult } from "@vennbase/react";
 import { useCurrentUser, useQuery, useRow, useSavedRow } from "@vennbase/react";
 import { useNavigate } from "react-router-dom";
@@ -176,8 +175,10 @@ export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps)
 
             try {
               const nextProvider = await createPractice(nextPracticeName, timezone, ownerUsername);
-              await savedProvider.save(nextProvider);
-              setCreatePracticeStatus(`Create practice succeeded for ${nextPracticeName}.`);
+              setCreatePracticeStatus("Opening provider workspace…");
+              void savedProvider.save(nextProvider).catch(() => {
+                setCreatePracticeStatus("Practice created, but we could not reopen it automatically.");
+              });
             } catch (error) {
               setCreatePracticeStatus("Create practice failed. Open the console and send me the error.");
             }

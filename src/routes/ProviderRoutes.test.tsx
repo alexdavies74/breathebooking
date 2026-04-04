@@ -191,6 +191,29 @@ describe("provider routes", () => {
     expect(await screen.findByText("Client settings route")).toBeInTheDocument();
   });
 
+  it("shows the provider workspace as opening without waiting for saved-row persistence", async () => {
+    const user = userEvent.setup();
+    const save = vi.fn(() => new Promise<void>(() => {}));
+    mocks.useSavedRow.mockReturnValue({ data: null, save, status: "success" });
+    mocks.createPractice.mockResolvedValue(createProviderRow());
+
+    render(
+      <MemoryRouter initialEntries={["/provider"]}>
+        <Routes>
+          <Route path="/provider" element={<ProviderDashboardRoute session={createSession() as never} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.clear(screen.getByLabelText("Display name"));
+    await user.type(screen.getByLabelText("Display name"), "Fast Practice");
+    await user.click(screen.getByRole("button", { name: "Create practice" }));
+
+    expect(mocks.createPractice).toHaveBeenCalledWith("Fast Practice", expect.any(String), "owner");
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: "provider-1" }));
+    expect(await screen.findByText("Opening provider workspace…")).toBeInTheDocument();
+  });
+
   it("denies access to client settings for non-owners", () => {
     mocks.useCurrentUser.mockReturnValue({ data: { username: "someone-else" } });
 

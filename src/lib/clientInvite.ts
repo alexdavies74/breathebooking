@@ -5,9 +5,13 @@ import type { Schema } from "./schema";
 type ProviderRow = RowHandle<Schema, "providers">;
 type ClientRow = RowHandle<Schema, "clients">;
 
-export async function buildClientInviteLink(provider: ProviderRow, client: ClientRow) {
-  const shareLink = await db.createShareLink(client.ref, "viewer").committed;
-  const url = new URL(shareLink);
+export function buildClientInviteLink(provider: ProviderRow, client: ClientRow) {
+  const shareLinkWrite = db.createShareLink(client.ref, "viewer");
+  void shareLinkWrite.committed.catch((error) => {
+    console.error("Background Vennbase write failed during buildClientInviteLink.", error);
+  });
+
+  const url = new URL(shareLinkWrite.value);
   url.pathname = "/invite";
   url.searchParams.set("clientId", client.id);
   url.searchParams.set("clientName", client.fields.fullName);
