@@ -152,12 +152,12 @@ export function ClientHomeRoute({ session }: ClientHomeRouteProps) {
   const sharedBookings = useQuery(
     db,
     "bookings",
-    bookingRootRef ? { in: bookingRootRef, select: "keys", orderBy: "startsAt", order: "asc" } : null,
+    bookingRootRef ? { in: bookingRootRef, select: "indexKeys", orderBy: "startsAt", order: "asc" } : null,
   );
   const bookingBlocks = useQuery(
     db,
     "bookingBlocks",
-    bookingRootRef ? { in: bookingRootRef, select: "keys", orderBy: "startsAt", order: "asc" } : null,
+    bookingRootRef ? { in: bookingRootRef, select: "indexKeys", orderBy: "startsAt", order: "asc" } : null,
   );
   const savedBookings = useQuery(
     db,

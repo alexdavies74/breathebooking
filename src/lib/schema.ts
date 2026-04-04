@@ -30,13 +30,13 @@ export const schema = defineSchema({
       startMinutes: field.number(),
       endMinutes: field.number(),
       status: field.string(),
-      sortKey: field.number().key(),
+      sortKey: field.number().indexKey(),
     },
   }),
   clients: collection({
     in: ["providerPrivateRoots"],
     fields: {
-      fullName: field.string().key(),
+      fullName: field.string().indexKey(),
       providerViewerLink: field.string(),
       status: field.string(),
       minimumDurationMinutes: field.number(),
@@ -51,7 +51,7 @@ export const schema = defineSchema({
   personalBlocks: collection({
     in: ["providerPrivateRoots"],
     fields: {
-      startsAt: field.number().key(),
+      startsAt: field.number().indexKey(),
       endsAt: field.number(),
       source: field.string(),
       label: field.string().optional(),
@@ -61,8 +61,8 @@ export const schema = defineSchema({
     in: ["bookingRoots"],
     fields: {
       clientRef: field.ref("clients"),
-      startsAt: field.number().key(),
-      endsAt: field.number().key(),
+      startsAt: field.number().indexKey(),
+      endsAt: field.number().indexKey(),
       guaranteedStartAt: field.number(),
       earliestStartAt: field.number().optional(),
       durationMinutes: field.number(),
@@ -74,8 +74,8 @@ export const schema = defineSchema({
   bookingBlocks: collection({
     in: ["bookingRoots"],
     fields: {
-      startsAt: field.number().key(),
-      endsAt: field.number().key(),
+      startsAt: field.number().indexKey(),
+      endsAt: field.number().indexKey(),
       source: field.string(),
       originRef: field.string(),
       label: field.string().optional(),
@@ -84,23 +84,23 @@ export const schema = defineSchema({
   rebookingPresets: collection({
     in: ["user"],
     fields: {
-      clientRef: field.ref("clients").key(),
+      clientRef: field.ref("clients").indexKey(),
       weekday: field.number(),
       startMinutes: field.number(),
       durationMinutes: field.number(),
       label: field.string(),
-      lastUsedAt: field.number().key(),
+      lastUsedAt: field.number().indexKey(),
       earliestStartMinutes: field.number().optional(),
     },
   }),
   savedBookings: collection({
     in: ["user"],
     fields: {
-      clientRef: field.ref("clients").key(),
+      clientRef: field.ref("clients").indexKey(),
       bookingRef: field.ref("bookings"),
       status: field.string(),
-      startsAt: field.number().key(),
-      endsAt: field.number().key(),
+      startsAt: field.number().indexKey(),
+      endsAt: field.number().indexKey(),
       guaranteedStartAt: field.number(),
       earliestStartAt: field.number().optional(),
       durationMinutes: field.number(),

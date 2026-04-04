@@ -13,8 +13,9 @@ interface HomeRouteProps {
 }
 
 export function HomeRoute({ session }: HomeRouteProps) {
-  const savedProvider = useSavedRow<Schema, RowHandle<Schema, "providers">>(db, {
+  const savedProvider = useSavedRow<Schema, "providers">(db, {
     key: "active-provider",
+    collection: "providers",
     enabled: Boolean(session.session?.signedIn),
   });
   const [clientAccessList, setClientAccessList] = useState<ClientWorkspaceAccess[] | null>(null);

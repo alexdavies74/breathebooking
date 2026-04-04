@@ -1,4 +1,4 @@
-import type { DbQueryProjectedRow, RowHandle } from "@vennbase/core";
+import type { DbIndexKeyProjection, RowHandle } from "@vennbase/core";
 import type { Schema } from "../lib/schema";
 import {
   addDays,
@@ -16,8 +16,8 @@ import type { BookingDraft, SlotShape, WeekBlock } from "./types";
 
 type AvailabilityRow = RowHandle<Schema, "baseAvailabilityWindows">;
 type BookingRow = RowHandle<Schema, "bookings">;
-type BookingKeyRow = DbQueryProjectedRow<Schema, "bookings">;
-type BookingBlockKeyRow = DbQueryProjectedRow<Schema, "bookingBlocks">;
+type BookingKeyRow = DbIndexKeyProjection<Schema, "bookings">;
+type BookingBlockKeyRow = DbIndexKeyProjection<Schema, "bookingBlocks">;
 type PersonalBlockRow = RowHandle<Schema, "personalBlocks">;
 type PresetRow = RowHandle<Schema, "rebookingPresets">;
 type ClientRow = RowHandle<Schema, "clients">;

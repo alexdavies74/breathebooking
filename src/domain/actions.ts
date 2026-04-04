@@ -76,7 +76,7 @@ async function assertBookingSlotAvailable(args: {
       startsAt: args.startsAt,
       endsAt: args.endsAt,
     },
-    select: "keys",
+    select: "indexKeys",
     limit: 10,
   });
 

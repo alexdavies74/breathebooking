@@ -219,7 +219,7 @@ describe("ClientHomeRoute", () => {
     expect(mocks.useQuery.mock.calls.map((call) => call[1])).not.toContain("clients");
   });
 
-  it("uses key-only booking and block queries and persists resolved client access", async () => {
+  it("uses index-key booking and block queries and persists resolved client access", async () => {
     render(
       <MemoryRouter initialEntries={["/client/client-1"]}>
         <Routes>
@@ -231,10 +231,14 @@ describe("ClientHomeRoute", () => {
     await screen.findAllByText(/open$/);
     await waitFor(() => {
       expect(
-        mocks.useQuery.mock.calls.find(([, collection, options]) => collection === "bookings" && options?.select === "keys"),
+        mocks.useQuery.mock.calls.find(
+          ([, collection, options]) => collection === "bookings" && options?.select === "indexKeys",
+        ),
       ).toBeTruthy();
       expect(
-        mocks.useQuery.mock.calls.find(([, collection, options]) => collection === "bookingBlocks" && options?.select === "keys"),
+        mocks.useQuery.mock.calls.find(
+          ([, collection, options]) => collection === "bookingBlocks" && options?.select === "indexKeys",
+        ),
       ).toBeTruthy();
     });
 

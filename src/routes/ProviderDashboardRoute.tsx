@@ -57,12 +57,13 @@ function createDraftFromBlock(block: WeekBlock): ProviderRangeDraft | null {
 export function ProviderDashboardRoute({ session }: ProviderDashboardRouteProps) {
   const navigate = useNavigate();
   const currentUser = useCurrentUser(db, { enabled: Boolean(session.session?.signedIn) });
-  const savedProvider = useSavedRow<Schema, RowHandle<Schema, "providers">>(db, {
+  const savedProvider = useSavedRow<Schema, "providers">(db, {
     key: "active-provider",
+    collection: "providers",
     enabled: Boolean(session.session?.signedIn),
   });
   const provider = savedProvider.data ?? null;
-  const privateRoot = useRow(db, provider?.fields.privateRootRef ?? undefined);
+  const privateRoot = useRow<Schema, "providerPrivateRoots">(db, provider?.fields.privateRootRef ?? undefined);
   const bookingRootRef = useMemo(() => {
     if (!provider) {
       return null;

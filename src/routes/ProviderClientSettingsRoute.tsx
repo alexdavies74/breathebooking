@@ -15,19 +15,20 @@ interface ProviderClientSettingsRouteProps {
 export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsRouteProps) {
   const { clientId } = useParams();
   const currentUser = useCurrentUser(db, { enabled: Boolean(session.session?.signedIn) });
-  const savedProvider = useSavedRow<Schema, RowHandle<Schema, "providers">>(db, {
+  const savedProvider = useSavedRow<Schema, "providers">(db, {
     key: "active-provider",
+    collection: "providers",
     enabled: Boolean(session.session?.signedIn),
   });
   const provider = savedProvider.data ?? null;
-  const privateRoot = useRow(db, provider?.fields.privateRootRef ?? undefined);
+  const privateRoot = useRow<Schema, "providerPrivateRoots">(db, provider?.fields.privateRootRef ?? undefined);
   const providerClients = useQuery(
     db,
     "clients",
     privateRoot.data ? { in: privateRoot.data.ref, orderBy: "fullName", order: "asc" } : null,
   );
   const client = clientId ? (providerClients.rows ?? []).find((row) => row.id === clientId) ?? null : null;
-  const inviteLink = useShareLink(db, client?.ref, { role: "viewer", enabled: Boolean(client) });
+  const inviteLink = useShareLink(db, client?.ref, "viewer", { enabled: Boolean(client) });
 
   const [minimumDurationMinutes, setMinimumDurationMinutes] = useState(180);
   const [travelTimeMinutes, setTravelTimeMinutes] = useState(30);

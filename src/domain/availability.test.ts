@@ -1,4 +1,4 @@
-import type { DbQueryProjectedRow, RowHandle } from "@vennbase/core";
+import type { DbIndexKeyProjection, RowHandle } from "@vennbase/core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildClientWeekBlocks,
@@ -27,12 +27,12 @@ function keyRow<TCollection extends "bookings" | "bookingBlocks">(
   collection: TCollection,
   id: string,
   fields: Record<string, unknown>,
-): DbQueryProjectedRow<Schema, TCollection> {
+): DbIndexKeyProjection<Schema, TCollection> {
   return {
     id,
     collection,
     fields,
-  } as unknown as DbQueryProjectedRow<Schema, TCollection>;
+  } as unknown as DbIndexKeyProjection<Schema, TCollection>;
 }
 
 describe("availability engine", () => {
