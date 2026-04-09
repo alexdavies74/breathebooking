@@ -27,7 +27,7 @@ export function ProviderClientSettingsRoute({ session }: ProviderClientSettingsR
     privateRoot.data ? { in: privateRoot.data.ref, orderBy: "fullName", order: "asc" } : null,
   );
   const client = clientId ? (providerClients.rows ?? []).find((row) => row.id === clientId) ?? null : null;
-  const inviteLink = useShareLink(db, client?.ref, "viewer", { enabled: Boolean(client) });
+  const inviteLink = useShareLink(db, client?.ref, "content-viewer", { enabled: Boolean(client) });
 
   const [minimumDurationMinutes, setMinimumDurationMinutes] = useState(180);
   const [travelTimeMinutes, setTravelTimeMinutes] = useState(30);

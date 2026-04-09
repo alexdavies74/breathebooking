@@ -6,7 +6,7 @@ type ProviderRow = RowHandle<Schema, "providers">;
 type ClientRow = RowHandle<Schema, "clients">;
 
 export function buildClientInviteLink(provider: ProviderRow, client: ClientRow) {
-  const shareLinkWrite = db.createShareLink(client.ref, "viewer");
+  const shareLinkWrite = db.createShareLink(client.ref, "content-viewer");
   void shareLinkWrite.committed.catch((error) => {
     console.error("Background Vennbase write failed during buildClientInviteLink.", error);
   });

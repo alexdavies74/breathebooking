@@ -169,7 +169,7 @@ export function createPractice(displayName: string, timezone: string, ownerUsern
   });
   const bookingRoot = bookingRootWrite.value;
 
-  const bookingSubmitterLinkWrite = db.createShareLink(bookingRoot.ref, "submitter");
+  const bookingSubmitterLinkWrite = db.createShareLink(bookingRoot.ref, "index-submitter");
   const providerUpdateWrite = db.update("providers", provider.ref, {
     bookingSubmitterLink: bookingSubmitterLinkWrite.value,
     privateRootRef: privateRoot.ref,
@@ -197,7 +197,7 @@ export function createClient(provider: ProviderRow, input: CreateClientInput) {
     throw new Error("Provider is missing a private root.");
   }
 
-  const providerViewerLinkWrite = db.createShareLink(provider.ref, "viewer");
+  const providerViewerLinkWrite = db.createShareLink(provider.ref, "content-viewer");
   const clientWrite = db.create(
     "clients",
     {
